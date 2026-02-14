@@ -1,16 +1,9 @@
-<p align="center">
-  <img src="assets/icon_128.png" alt="Hearsay icon" width="80" />
-</p>
+<h1 align="center">  <img src="assets/icon_128.png" alt="Hearsay icon" width="80" /> Hearsay</h1>
 
-<h1 align="center">Hearsay</h1>
-
-<p align="center">
-  Local speech-to-text for macOS. Hold Right Option to record, release to transcribe, auto-paste at cursor.
+Local speech-to-text for macOS. Hold Right Option to record, release to transcribe, auto-paste at cursor.
   <br><br>
-  <b>100% local</b> — no cloud, no data leaves your Mac.
-  <br><br>
-  Powered by <a href="https://github.com/antirez/qwen-asr">qwen-asr</a> by <a href="https://github.com/antirez">antirez</a> 🙏
-</p>
+Uses Antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a> 
+Local models FTW.
 
 ![Demo](assets/demo.gif)
 

@@ -15,8 +15,8 @@ Hearsay.xcodeproj/
 *~
 .Trash/
 
-# Models (too large for git)
-Models/
+# Downloaded models (too large for git) - in ~/Library/Application Support/Hearsay/Models/
+# Don't ignore Hearsay/Models/ source code
 *.safetensors
 
 # Audio files

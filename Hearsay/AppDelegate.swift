@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingIndicator: RecordingIndicator!
     private var transcriber: Transcriber?
     private var historyWindowController: HistoryWindowController?
+    private var onboardingWindowController: OnboardingWindowController?
     
     // MARK: - State
     
@@ -210,30 +211,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Model Setup
     
     private func setupModel() async {
-        // Check for installed models
-        let models = Transcriber.availableModels()
-        
         await MainActor.run {
-            if let firstModel = models.first {
-                currentModelPath = firstModel.path
-                transcriber = Transcriber(modelPath: firstModel.path)
-                statusBar.updateModelName(firstModel.lastPathComponent)
-                print("Hearsay: Using model at \(firstModel.path)")
+            // Check for installed models using ModelDownloader
+            let installedModels = ModelDownloader.shared.installedModels()
+            
+            if let firstModel = installedModels.first {
+                let modelPath = Constants.modelsDirectory.appendingPathComponent(firstModel.rawValue).path
+                currentModelPath = modelPath
+                transcriber = Transcriber(modelPath: modelPath)
+                statusBar.updateModelName(firstModel.displayName)
+                logger.info("Using model: \(firstModel.rawValue)")
             } else {
-                // No model installed - check for development model
+                // Check for development model as fallback
                 let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
                 if FileManager.default.fileExists(atPath: devModelPath) {
                     currentModelPath = devModelPath
                     transcriber = Transcriber(modelPath: devModelPath)
                     statusBar.updateModelName("qwen3-asr-0.6b (dev)")
-                    print("Hearsay: Using development model at \(devModelPath)")
+                    logger.info("Using development model")
                 } else {
+                    // No model - show onboarding
                     statusBar.updateModelName(nil)
-                    print("Hearsay: No model found. Showing onboarding...")
-                    showOnboarding()
+                    logger.info("No model found, showing onboarding")
+                    showOnboardingForDownload()
                 }
             }
         }
+    }
+    
+    private func showOnboardingForDownload() {
+        if onboardingWindowController == nil {
+            onboardingWindowController = OnboardingWindowController()
+            onboardingWindowController?.onComplete = { [weak self] in
+                // Model downloaded, set it up
+                Task {
+                    await self?.setupModel()
+                }
+            }
+        }
+        onboardingWindowController?.show()
     }
     
     // MARK: - Recording
@@ -374,24 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Windows
     
     private func showOnboarding() {
-        let alert = NSAlert()
-        alert.messageText = "Download a Model"
-        alert.informativeText = """
-        Hearsay needs an AI model to transcribe speech.
-        
-        Please copy a model folder (e.g., qwen3-asr-0.6b) to:
-        \(Constants.modelsDirectory.path)
-        
-        You can download models from Hugging Face:
-        https://huggingface.co/Qwen/Qwen3-ASR
-        """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Open Models Folder")
-        alert.addButton(withTitle: "Cancel")
-        
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(Constants.modelsDirectory)
-        }
+        showOnboardingForDownload()
     }
     
     private func showHistory() {

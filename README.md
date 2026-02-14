@@ -1,9 +1,15 @@
-<h1 align="center">  <img src="assets/icon_128.png" alt="Hearsay icon" width="80" /> Hearsay</h1>
+<h1>  <img src="assets/icon_128.png" alt="Hearsay icon" width="30"/> Hearsay</h1>
 
-Local speech-to-text for macOS. Hold Right Option to record, release to transcribe, auto-paste at cursor.
-  <br><br>
-Uses Antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a> 
-Local models FTW.
+__Local speech-to-text for macOS__. __Uses Antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a>.__
+
+```bash
+brew install --cask swairshah/tap/hearsay
+```
+
+Hold Right Option to record, release to transcribe, auto-paste at cursor.
+
+
+### Local models FTW.
 
 ![Demo](assets/demo.gif)
 

@@ -1,0 +1,27 @@
+name: Hearsay
+options:
+  bundleIdPrefix: com.swair
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "16.0"
+  minimumXcodeGenVersion: "2.0"
+
+targets:
+  Hearsay:
+    type: application
+    platform: macOS
+    sources:
+      - Hearsay
+    settings:
+      base:
+        INFOPLIST_FILE: Hearsay/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Hearsay/Hearsay.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.swair.hearsay
+        PRODUCT_NAME: Hearsay
+        SWIFT_VERSION: "5"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: true
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        ENABLE_HARDENED_RUNTIME: false

@@ -1,0 +1,33 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+*.xcodeproj/project.xcworkspace/
+
+# Generated (recreate with: xcodegen generate)
+Hearsay.xcodeproj/
+
+# macOS
+.DS_Store
+*.swp
+*~
+.Trash/
+
+# Models (too large for git)
+Models/
+*.safetensors
+
+# Audio files
+*.wav
+*.mp3
+
+# Archives
+*.dmg
+*.zip
+*.tar.gz
+
+# Credentials/secrets
+*.pem
+*.p12

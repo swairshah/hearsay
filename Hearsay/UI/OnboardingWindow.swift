@@ -10,7 +10,7 @@ final class OnboardingWindowController: NSWindowController {
     
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -124,6 +124,9 @@ private class OnboardingContentView: NSView {
         downloadButton.action = #selector(downloadTapped)
         addSubview(downloadButton)
         
+        // Update button based on selected model
+        updateDownloadButton()
+        
         // Progress container (hidden initially)
         progressContainer.isHidden = true
         addSubview(progressContainer)
@@ -206,8 +209,8 @@ private class OnboardingContentView: NSView {
         y -= 60
         
         // Model selector
-        let selectorWidth: CGFloat = 340
-        let selectorHeight: CGFloat = 80
+        let selectorWidth: CGFloat = 440
+        let selectorHeight: CGFloat = 100
         modelSelector.frame = NSRect(x: centerX - selectorWidth/2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)
         y -= selectorHeight + 30
         
@@ -233,9 +236,25 @@ private class OnboardingContentView: NSView {
         selectedModel = model
         smallModelButton.setSelected(model == .small)
         largeModelButton.setSelected(model == .large)
+        updateDownloadButton()
+    }
+    
+    private func updateDownloadButton() {
+        let isInstalled = ModelDownloader.shared.isModelInstalled(selectedModel)
+        if isInstalled {
+            downloadButton.title = "Continue"
+        } else {
+            downloadButton.title = "Download & Continue"
+        }
     }
     
     @objc private func downloadTapped() {
+        // If already installed, just continue
+        if ModelDownloader.shared.isModelInstalled(selectedModel) {
+            onComplete?()
+            return
+        }
+        
         downloadButton.isHidden = true
         progressContainer.isHidden = false
         smallModelButton.isEnabled = false
@@ -291,6 +310,7 @@ private class ModelButton: NSView {
     private let sizeLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(labelWithString: "")
     private let checkmark = NSTextField(labelWithString: "✓")
+    private let downloadedBadge = NSTextField(labelWithString: "Downloaded")
     
     var isEnabled: Bool = true {
         didSet {
@@ -315,7 +335,7 @@ private class ModelButton: NSView {
         containerBox.boxType = .custom
         containerBox.cornerRadius = 10
         containerBox.borderWidth = 2
-        containerBox.fillColor = NSColor(white: 0.95, alpha: 1)
+        containerBox.fillColor = NSColor.controlBackgroundColor
         addSubview(containerBox)
         
         nameLabel.stringValue = model.displayName
@@ -328,13 +348,19 @@ private class ModelButton: NSView {
         containerBox.addSubview(sizeLabel)
         
         descLabel.stringValue = model.description
-        descLabel.font = .systemFont(ofSize: 10)
+        descLabel.font = .systemFont(ofSize: 11)
         descLabel.textColor = .tertiaryLabelColor
         containerBox.addSubview(descLabel)
         
         checkmark.font = .systemFont(ofSize: 16, weight: .bold)
         checkmark.textColor = .systemBlue
         containerBox.addSubview(checkmark)
+        
+        downloadedBadge.stringValue = "✓ Downloaded"
+        downloadedBadge.font = .systemFont(ofSize: 10, weight: .medium)
+        downloadedBadge.textColor = .systemGreen
+        downloadedBadge.isHidden = !ModelDownloader.shared.isModelInstalled(model)
+        containerBox.addSubview(downloadedBadge)
     }
     
     func setSelected(_ selected: Bool) {
@@ -353,25 +379,31 @@ private class ModelButton: NSView {
         containerBox.frame = bounds
         
         let padding: CGFloat = 12
+        let contentWidth = bounds.width - padding * 2 - 24  // Leave room for checkmark
         var y = bounds.height - padding - 18
         
-        nameLabel.sizeToFit()
-        nameLabel.frame.origin = NSPoint(x: padding, y: y)
+        // Title row
+        nameLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: 18)
         
         checkmark.sizeToFit()
         checkmark.frame.origin = NSPoint(x: bounds.width - padding - checkmark.frame.width, y: y)
         
-        y -= 16
-        sizeLabel.sizeToFit()
-        sizeLabel.frame.origin = NSPoint(x: padding, y: y)
+        // Size row
+        y -= 18
+        sizeLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: 16)
         
-        y -= 14
-        descLabel.sizeToFit()
-        descLabel.frame.origin = NSPoint(x: padding, y: y)
+        // Description row
+        y -= 18
+        descLabel.frame = NSRect(x: padding, y: y, width: bounds.width - padding * 2, height: 16)
+        
+        // Downloaded badge row (bottom)
+        y -= 18
+        downloadedBadge.sizeToFit()
+        downloadedBadge.frame.origin = NSPoint(x: padding, y: y)
     }
     
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 160, height: 80)
+        NSSize(width: 210, height: 100)
     }
     
     override func mouseDown(with event: NSEvent) {

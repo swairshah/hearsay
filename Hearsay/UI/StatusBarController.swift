@@ -37,8 +37,12 @@ final class StatusBarController {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         
         if let button = statusItem.button {
-            // Use SF Symbol for microphone
-            if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Hearsay") {
+            // Use custom template image for menu bar
+            if let image = NSImage(named: "hearsayTemplate") {
+                image.isTemplate = true  // Allows system to adjust for dark/light mode
+                button.image = image
+            } else if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Hearsay") {
+                // Fallback to SF Symbol
                 let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                 button.image = image.withSymbolConfiguration(config)
             } else {
@@ -163,18 +167,10 @@ final class StatusBarController {
         if let button = statusItem.button {
             if isRecording {
                 // Change to red tint during recording
-                if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Recording") {
-                    let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-                    button.image = image.withSymbolConfiguration(config)
-                    button.contentTintColor = Constants.recordingDot
-                }
+                button.contentTintColor = Constants.recordingDot
             } else {
-                // Reset to normal
-                if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Hearsay") {
-                    let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-                    button.image = image.withSymbolConfiguration(config)
-                    button.contentTintColor = nil
-                }
+                // Reset to normal (template mode handles dark/light)
+                button.contentTintColor = nil
             }
         }
     }

@@ -11,7 +11,14 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Hearsay
+      - path: Hearsay
+        excludes:
+          - "**/*.xcassets"
+    resources:
+      - path: Hearsay/Resources/Assets.xcassets
+      - path: Hearsay/Resources/hearsayTemplate.png
+      - path: Hearsay/Resources/hearsayTemplate@2x.png
+      - path: Hearsay/Resources/hearsayTemplate@3x.png
     settings:
       base:
         INFOPLIST_FILE: Hearsay/Info.plist

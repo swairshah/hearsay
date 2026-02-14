@@ -10,7 +10,7 @@ final class OnboardingWindowController: NSWindowController {
     
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -216,8 +216,8 @@ private class OnboardingContentView: NSView {
         let buttonWidth = max(180, downloadButton.frame.width + 40)
         downloadButton.frame = NSRect(x: centerX - buttonWidth/2, y: y - 32, width: buttonWidth, height: 32)
         
-        // Progress container (same position as button)
-        progressContainer.frame = NSRect(x: 40, y: y - 60, width: bounds.width - 80, height: 60)
+        // Progress container (same position as button, with bottom padding)
+        progressContainer.frame = NSRect(x: 60, y: y - 40, width: bounds.width - 120, height: 60)
         
         // Progress bar
         progressBar.frame = NSRect(x: 0, y: 35, width: progressContainer.bounds.width, height: 20)

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var transcriber: Transcriber?
     private var historyWindowController: HistoryWindowController?
     private var onboardingWindowController: OnboardingWindowController?
+    private var settingsWindowController: SettingsWindowController?
     
     // MARK: - State
     
@@ -25,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("Hearsay: Starting up...")
+        
+        // Apply dock icon preference
+        let showDockIcon = UserDefaults.standard.bool(forKey: "showDockIcon")
+        NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
         
         // Create necessary directories
         createDirectories()
@@ -46,6 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyMonitor?.stop()
+    }
+    
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // When clicking dock icon, show settings
+        showSettings()
+        return true
     }
     
     // MARK: - Setup
@@ -401,10 +412,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func showSettings() {
-        // TODO: Implement settings window
-        let alert = NSAlert()
-        alert.messageText = "Settings"
-        alert.informativeText = "Settings coming soon!"
-        alert.runModal()
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController()
+            settingsWindowController?.onHotkeyChanged = { [weak self] in
+                // Reload hotkey settings
+                self?.hotkeyMonitor.loadSettings()
+            }
+        }
+        settingsWindowController?.show()
     }
 }

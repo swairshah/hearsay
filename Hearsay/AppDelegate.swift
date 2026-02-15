@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         statusBar.onToggleEnabled = { [weak self] enabled in
             if enabled {
-                self?.hotkeyMonitor.start()
+                self?.tryStartHotkeyMonitor()
             } else {
                 self?.hotkeyMonitor.stop()
             }
@@ -147,6 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = await PermissionsManager.requestMicrophone()
         }
         
+        // Prompt for Accessibility explicitly when not trusted.
+        if PermissionsManager.checkAccessibility() != .granted {
+            await MainActor.run {
+                PermissionsManager.requestAccessibility()
+            }
+        }
+        
         // Try to start hotkey monitor
         await MainActor.run {
             tryStartHotkeyMonitor()
@@ -156,6 +163,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionRetryCount = 0
     
     private func tryStartHotkeyMonitor() {
+        // Gate startup on actual trust state so we don't run in a non-functional
+        // "started" state without global hotkey events.
+        let hasAccessibility = PermissionsManager.checkAccessibility() == .granted
+        if !hasAccessibility {
+            permissionRetryCount += 1
+            
+            if permissionRetryCount == 1 {
+                logger.info("Need accessibility permission, requesting...")
+                NSApp.activate(ignoringOtherApps: true)
+                PermissionsManager.requestAccessibility()
+            }
+            
+            if permissionRetryCount == 5 {
+                DispatchQueue.main.async {
+                    self.showAccessibilityHelp()
+                }
+            }
+            
+            if permissionCheckTimer == nil {
+                permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                    self?.tryStartHotkeyMonitor()
+                }
+            }
+            return
+        }
+        
         // Try to start - if it works, we have permission
         if hotkeyMonitor.start() {
             logger.info("Hotkey monitor started successfully")
@@ -165,40 +198,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
-        // Failed to start - need permission
+        // Failed to start even though permission was reported as granted.
         permissionRetryCount += 1
         
-        // First failure - just request permission silently
         if permissionRetryCount == 1 {
-            logger.info("Need accessibility permission, requesting...")
-            PermissionsManager.requestAccessibility()
+            logger.warning("Hotkey monitor failed to start despite granted permission, retrying...")
         }
         
-        // After 5 seconds of failures, show helpful message
         if permissionRetryCount == 5 {
             DispatchQueue.main.async {
                 self.showAccessibilityHelp()
             }
         }
         
-        // Poll for permission to be granted
         if permissionCheckTimer == nil {
             permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                self.permissionRetryCount += 1
-                
-                // Try to start again
-                if self.hotkeyMonitor.start() {
-                    logger.info("Hotkey monitor started after permission granted!")
-                    self.permissionCheckTimer?.invalidate()
-                    self.permissionCheckTimer = nil
-                    self.permissionRetryCount = 0
-                }
+                self?.tryStartHotkeyMonitor()
             }
         }
     }
     
     private func showAccessibilityHelp() {
+        NSApp.activate(ignoringOtherApps: true)
+        
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Needed"
         alert.informativeText = """

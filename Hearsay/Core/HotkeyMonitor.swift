@@ -4,12 +4,12 @@ import os.log
 
 private let hotkeyLogger = Logger(subsystem: "com.swair.hearsay", category: "hotkey")
 
-/// Monitors for RIGHT Option key press/release globally using CGEventTap.
+/// Monitors for global hotkeys using CGEventTap.
 /// This requires Accessibility permissions.
 /// 
 /// Two recording modes:
-/// 1. Hold mode: Hold Right Option → release to transcribe
-/// 2. Toggle mode: Press Space + Right Option → press Escape/Space/Right Option to stop
+/// 1. Hold mode: Hold a modifier key → release to transcribe
+/// 2. Toggle mode: Press a key combo to start → press stop key or Escape to stop
 final class HotkeyMonitor {
     
     enum State {
@@ -18,10 +18,11 @@ final class HotkeyMonitor {
         case recordingToggle  // Toggle mode - press Escape/Space/Right Option to stop
     }
     
-    // Keycodes
-    private let kVK_RightOption: Int64 = 61
-    private let kVK_LeftOption: Int64 = 58
-    private let kVK_Space: Int64 = 49
+    // Keycodes (configurable)
+    private var holdKeyCode: Int64 = 61  // Default: Right Option
+    private var toggleStartKeyCode: Int64 = 49  // Default: Space
+    private var toggleStartModifiers: UInt64 = 0  // Default: Option
+    private var toggleStopKeyCode: Int64 = 49  // Default: Space
     private let kVK_Escape: Int64 = 53
     
     var onRecordingStart: (() -> Void)?
@@ -36,7 +37,18 @@ final class HotkeyMonitor {
     // Track if Right Option is currently held (for combo detection)
     private var rightOptionHeld = false
     
-    init() {}
+    init() {
+        loadSettings()
+    }
+    
+    /// Reload hotkey settings from UserDefaults
+    func loadSettings() {
+        holdKeyCode = Int64(UserDefaults.standard.object(forKey: "holdKeyCode") as? Int ?? 61)
+        toggleStartKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStartKeyCode") as? Int ?? 49)
+        toggleStartModifiers = UInt64(UserDefaults.standard.object(forKey: "toggleStartModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
+        toggleStopKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStopKeyCode") as? Int ?? 49)
+        hotkeyLogger.info("Hotkeys loaded: hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), toggleStop=\(self.toggleStopKeyCode)")
+    }
     
     deinit {
         stop()
@@ -79,7 +91,7 @@ final class HotkeyMonitor {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         
-        hotkeyLogger.info("Event tap started - listening for RIGHT Option (hold) or Space+Right Option (toggle)")
+        hotkeyLogger.info("Event tap started - listening for hold key \(self.holdKeyCode) or toggle combo")
         return true
     }
     
@@ -127,11 +139,14 @@ final class HotkeyMonitor {
         
         hotkeyLogger.debug("FlagsChanged: keyCode=\(keyCode), option=\(optionPressed), otherMods=\(otherModifiers), state=\(String(describing: self.state))")
         
+        // Check if our hold key is a modifier that's currently pressed
+        let holdKeyIsPressed = isModifierKeyPressed(keyCode: holdKeyCode, flags: flags)
+        
         // === IDLE STATE ===
         if state == .idle {
-            // Right Option pressed alone - start HOLD mode
-            if keyCode == kVK_RightOption && optionPressed && !otherModifiers {
-                hotkeyLogger.info("RIGHT OPTION DOWN - starting HOLD recording")
+            // Hold key pressed alone - start HOLD mode
+            if keyCode == holdKeyCode && holdKeyIsPressed && !otherModifiers {
+                hotkeyLogger.info("HOLD KEY DOWN - starting HOLD recording")
                 rightOptionDownAlone = true
                 rightOptionHeld = true
                 state = .recordingHold
@@ -142,9 +157,9 @@ final class HotkeyMonitor {
         }
         // === HOLD RECORDING STATE ===
         else if state == .recordingHold {
-            // Right Option released - stop recording
-            if keyCode == kVK_RightOption && !optionPressed {
-                hotkeyLogger.info("RIGHT OPTION UP - stopping HOLD recording")
+            // Hold key released - stop recording
+            if keyCode == holdKeyCode && !holdKeyIsPressed {
+                hotkeyLogger.info("HOLD KEY UP - stopping HOLD recording")
                 rightOptionDownAlone = false
                 rightOptionHeld = false
                 state = .idle
@@ -165,9 +180,9 @@ final class HotkeyMonitor {
         }
         // === TOGGLE RECORDING STATE ===
         else if state == .recordingToggle {
-            // Right Option pressed - stop recording
-            if keyCode == kVK_RightOption && optionPressed {
-                hotkeyLogger.info("RIGHT OPTION - stopping TOGGLE recording")
+            // Hold key pressed again - stop recording
+            if keyCode == holdKeyCode && holdKeyIsPressed {
+                hotkeyLogger.info("HOLD KEY - stopping TOGGLE recording")
                 state = .idle
                 rightOptionHeld = false
                 DispatchQueue.main.async { [weak self] in
@@ -175,8 +190,8 @@ final class HotkeyMonitor {
                 }
                 return nil  // Consume event
             }
-            // Track Right Option release in toggle mode
-            if keyCode == kVK_RightOption && !optionPressed {
+            // Track hold key release in toggle mode
+            if keyCode == holdKeyCode && !holdKeyIsPressed {
                 rightOptionHeld = false
             }
         }
@@ -185,17 +200,25 @@ final class HotkeyMonitor {
     }
     
     private func handleKeyDown(keyCode: Int64, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Space pressed during HOLD recording - switch to TOGGLE mode
-        if keyCode == kVK_Space && state == .recordingHold {
-            hotkeyLogger.info("SPACE during HOLD - switching to TOGGLE mode")
-            state = .recordingToggle
-            rightOptionDownAlone = false
-            return nil  // Consume the space
+        let currentModifiers = event.flags.rawValue & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue | CGEventFlags.maskControl.rawValue)
+        
+        // Check for toggle START combo (key + modifiers) when IDLE
+        if state == .idle && keyCode == toggleStartKeyCode {
+            // Check if required modifiers match (allow extra modifiers)
+            let requiredMods = toggleStartModifiers & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue | CGEventFlags.maskControl.rawValue)
+            if (currentModifiers & requiredMods) == requiredMods && requiredMods != 0 {
+                hotkeyLogger.info("TOGGLE START COMBO - starting TOGGLE recording")
+                state = .recordingToggle
+                DispatchQueue.main.async { [weak self] in
+                    self?.onRecordingStart?()
+                }
+                return nil  // Consume the key
+            }
         }
         
-        // Space pressed during TOGGLE recording - stop
-        if keyCode == kVK_Space && state == .recordingToggle {
-            hotkeyLogger.info("SPACE - stopping TOGGLE recording")
+        // Toggle STOP key pressed during TOGGLE recording - stop
+        if keyCode == toggleStopKeyCode && state == .recordingToggle {
+            hotkeyLogger.info("TOGGLE STOP KEY - stopping TOGGLE recording")
             state = .idle
             DispatchQueue.main.async { [weak self] in
                 self?.onRecordingStop?()
@@ -218,6 +241,24 @@ final class HotkeyMonitor {
     
     private func handleKeyUp(keyCode: Int64, event: CGEvent) -> Unmanaged<CGEvent>? {
         return Unmanaged.passRetained(event)
+    }
+    
+    // MARK: - Helpers
+    
+    /// Check if a modifier key is currently pressed based on flags
+    private func isModifierKeyPressed(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        switch keyCode {
+        case 61, 58:  // Right/Left Option
+            return flags.contains(.maskAlternate)
+        case 54, 55:  // Right/Left Command
+            return flags.contains(.maskCommand)
+        case 62, 59:  // Right/Left Control
+            return flags.contains(.maskControl)
+        case 60, 56:  // Right/Left Shift
+            return flags.contains(.maskShift)
+        default:
+            return false
+        }
     }
     
     // MARK: - Permissions

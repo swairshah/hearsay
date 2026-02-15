@@ -4,26 +4,22 @@ import os.log
 
 private let hotkeyLogger = Logger(subsystem: "com.swair.hearsay", category: "hotkey")
 
-/// Monitors for global hotkeys using CGEventTap.
-/// This requires Accessibility permissions.
-/// 
-/// Two recording modes:
-/// 1. Hold mode: Hold a modifier key → release to transcribe
-/// 2. Toggle mode: Press a key combo to start → press stop key or Escape to stop
+/// Monitors for global hotkeys using:
+/// - CGEventTap flagsChanged for hold mode (modifier press/release)
+/// - Carbon EventHotKey for toggle combo (reliable in menu-bar/background mode)
 final class HotkeyMonitor {
     
     enum State {
         case idle
-        case recordingHold    // Hold mode - release Right Option to stop
-        case recordingToggle  // Toggle mode - press Escape/Space/Right Option to stop
+        case recordingHold    // Hold mode - release hold key to stop
+        case recordingToggle  // Toggle mode - press toggle combo again to stop
     }
     
     // Keycodes (configurable)
     private var holdKeyCode: Int64 = 61  // Default: Right Option
     private var toggleStartKeyCode: Int64 = 49  // Default: Space
     private var toggleStartModifiers: UInt64 = 0  // Default: Option
-    private var toggleStopKeyCode: Int64 = 49  // Default: Space
-    private let kVK_Escape: Int64 = 53
+    private var toggleStopKeyCode: Int64 = 49  // Kept for settings compatibility
     
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
@@ -31,16 +27,26 @@ final class HotkeyMonitor {
     private(set) var state: State = .idle
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var keyStatePollTimer: Timer?
-    private var ignoreStopUntil = Date.distantPast
     
-    // Track if Right Option is held alone (no other modifiers/keys)
+    private var hotKeyHandler: EventHandlerRef?
+    private var toggleHotKeyRef: EventHotKeyRef?
+    private let toggleHotKeyID: UInt32 = 1
+    
+    // Track if hold key is held alone (no other modifiers/keys)
     private var rightOptionDownAlone = false
-    // Track if Right Option is currently held (for combo detection)
+    // Track if hold key is currently held
     private var rightOptionHeld = false
     
     init() {
         loadSettings()
+    }
+    
+    deinit {
+        stop()
+        if let handler = hotKeyHandler {
+            RemoveEventHandler(handler)
+            hotKeyHandler = nil
+        }
     }
     
     /// Reload hotkey settings from UserDefaults
@@ -50,18 +56,18 @@ final class HotkeyMonitor {
         toggleStartModifiers = UInt64(UserDefaults.standard.object(forKey: "toggleStartModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
         toggleStopKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStopKeyCode") as? Int ?? 49)
         hotkeyLogger.info("Hotkeys loaded: hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), toggleStop=\(self.toggleStopKeyCode)")
-    }
-    
-    deinit {
-        stop()
+        
+        if eventTap != nil {
+            registerToggleHotKey()
+        }
     }
     
     // MARK: - Public
     
     func start() -> Bool {
-        guard eventTap == nil else { 
+        guard eventTap == nil else {
             hotkeyLogger.info("Event tap already exists")
-            return true 
+            return true
         }
         guard Self.hasAccessibilityPermission else {
             hotkeyLogger.error("Cannot start hotkey monitor - Accessibility permission not granted")
@@ -70,18 +76,15 @@ final class HotkeyMonitor {
         
         hotkeyLogger.info("Creating event tap...")
         
-        // Monitor flags changed (modifiers) AND key down/up (for Space, Escape)
-        let eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue) |
-                                      (1 << CGEventType.keyDown.rawValue) |
-                                      (1 << CGEventType.keyUp.rawValue)
+        // Hold mode relies on modifier transitions only.
+        let eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
         
-        // Create event tap
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: eventMask,
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+            callback: { (_, type, event, refcon) -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
                 return monitor.handleEvent(type: type, event: event)
@@ -97,7 +100,10 @@ final class HotkeyMonitor {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         
-        hotkeyLogger.info("Event tap started - listening for hold key \(self.holdKeyCode) or toggle combo")
+        installHotKeyHandlerIfNeeded()
+        registerToggleHotKey()
+        
+        hotkeyLogger.info("Event tap started - listening for hold key \(self.holdKeyCode) and toggle combo")
         return true
     }
     
@@ -108,8 +114,7 @@ final class HotkeyMonitor {
                 CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
             }
         }
-        keyStatePollTimer?.invalidate()
-        keyStatePollTimer = nil
+        unregisterToggleHotKey()
         eventTap = nil
         runLoopSource = nil
         state = .idle
@@ -118,7 +123,6 @@ final class HotkeyMonitor {
     // MARK: - Event Handling
     
     private func handleEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Handle tap disabled (system can disable it under heavy load)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             hotkeyLogger.warning("Event tap was disabled, re-enabling...")
             if let tap = eventTap {
@@ -127,82 +131,48 @@ final class HotkeyMonitor {
             return Unmanaged.passUnretained(event)
         }
         
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        
-        // Handle key down/up for Space and Escape
-        if type == .keyDown {
-            return handleKeyDown(keyCode: keyCode, event: event)
-        } else if type == .keyUp {
-            return handleKeyUp(keyCode: keyCode, event: event)
-        }
-        
-        // Handle modifier flags changed
         guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
         
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
         let optionPressed = flags.contains(.maskAlternate)
-        let otherModifiers = flags.contains(.maskCommand) || 
-                            flags.contains(.maskControl) || 
-                            flags.contains(.maskShift)
+        let otherModifiers = flags.contains(.maskCommand) ||
+                             flags.contains(.maskControl) ||
+                             flags.contains(.maskShift)
         
         hotkeyLogger.debug("FlagsChanged: keyCode=\(keyCode), option=\(optionPressed), otherMods=\(otherModifiers), state=\(String(describing: self.state))")
         
-        // Check if our hold key is a modifier that's currently pressed
         let holdKeyIsPressed = isModifierKeyPressed(keyCode: holdKeyCode, flags: flags)
         
-        // === IDLE STATE ===
         if state == .idle {
-            // Hold key pressed alone - start HOLD mode
             if keyCode == holdKeyCode && holdKeyIsPressed && !otherModifiers {
                 hotkeyLogger.info("HOLD KEY DOWN - starting HOLD recording")
                 rightOptionDownAlone = true
                 rightOptionHeld = true
                 state = .recordingHold
-                updateKeyStatePolling()
                 DispatchQueue.main.async { [weak self] in
                     self?.onRecordingStart?()
                 }
             }
-        }
-        // === HOLD RECORDING STATE ===
-        else if state == .recordingHold {
-            // Hold key released - stop recording
+        } else if state == .recordingHold {
             if keyCode == holdKeyCode && !holdKeyIsPressed {
                 hotkeyLogger.info("HOLD KEY UP - stopping HOLD recording")
                 rightOptionDownAlone = false
                 rightOptionHeld = false
                 state = .idle
-                updateKeyStatePolling()
                 DispatchQueue.main.async { [weak self] in
                     self?.onRecordingStop?()
                 }
-            }
-            // Other modifier pressed - cancel
-            else if otherModifiers && rightOptionDownAlone {
+            } else if otherModifiers && rightOptionDownAlone {
                 hotkeyLogger.info("Other modifier pressed - canceling HOLD recording")
                 rightOptionDownAlone = false
                 rightOptionHeld = false
                 state = .idle
-                updateKeyStatePolling()
                 DispatchQueue.main.async { [weak self] in
                     self?.onRecordingStop?()
                 }
             }
-        }
-        // === TOGGLE RECORDING STATE ===
-        else if state == .recordingToggle {
-            // Hold key pressed again - stop recording
-            if keyCode == holdKeyCode && holdKeyIsPressed {
-                hotkeyLogger.info("HOLD KEY - stopping TOGGLE recording")
-                state = .idle
-                rightOptionHeld = false
-                updateKeyStatePolling()
-                DispatchQueue.main.async { [weak self] in
-                    self?.onRecordingStop?()
-                }
-                return nil  // Consume event
-            }
-            // Track hold key release in toggle mode
+        } else if state == .recordingToggle {
             if keyCode == holdKeyCode && !holdKeyIsPressed {
                 rightOptionHeld = false
             }
@@ -211,119 +181,100 @@ final class HotkeyMonitor {
         return Unmanaged.passUnretained(event)
     }
     
-    private func handleKeyDown(keyCode: Int64, event: CGEvent) -> Unmanaged<CGEvent>? {
-        let currentModifiers = event.flags.rawValue & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue | CGEventFlags.maskControl.rawValue)
-        let requiredMods = toggleStartModifiers & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue | CGEventFlags.maskControl.rawValue)
-        let hasRequiredModifiers = requiredMods == 0
-            ? currentModifiers == 0
-            : (currentModifiers & requiredMods) == requiredMods
-        let isToggleStartCombo = keyCode == toggleStartKeyCode && hasRequiredModifiers
+    // MARK: - Carbon Hotkey
+    
+    private func installHotKeyHandlerIfNeeded() {
+        guard hotKeyHandler == nil else { return }
         
-        // Check for toggle START combo (key + modifiers) when IDLE
-        if state == .idle && isToggleStartCombo {
-            hotkeyLogger.info("TOGGLE START COMBO - starting TOGGLE recording")
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, event, userData in
+                guard let userData = userData else { return noErr }
+                let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userData).takeUnretainedValue()
+                
+                var hotKeyID = EventHotKeyID()
+                let result = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+                
+                if result == noErr && hotKeyID.id == monitor.toggleHotKeyID {
+                    monitor.handleToggleHotKeyPressed()
+                }
+                return noErr
+            },
+            1,
+            &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &hotKeyHandler
+        )
+        
+        if status != noErr {
+            hotkeyLogger.error("Failed to install hotkey handler: status=\(status)")
+        }
+    }
+    
+    private func registerToggleHotKey() {
+        unregisterToggleHotKey()
+        
+        guard toggleStartKeyCode > 0 else { return }
+        
+        let carbonModifiers = carbonModifiersFromCGFlags(toggleStartModifiers)
+        var hotKeyID = EventHotKeyID(signature: fourCharCode("HSY1"), id: toggleHotKeyID)
+        
+        let status = RegisterEventHotKey(
+            UInt32(toggleStartKeyCode),
+            carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &toggleHotKeyRef
+        )
+        
+        if status != noErr {
+            hotkeyLogger.error("Failed to register toggle hotkey: keyCode=\(self.toggleStartKeyCode), modifiers=\(self.toggleStartModifiers), status=\(status)")
+        } else {
+            hotkeyLogger.info("Registered toggle hotkey: keyCode=\(self.toggleStartKeyCode), carbonModifiers=\(carbonModifiers)")
+        }
+    }
+    
+    private func unregisterToggleHotKey() {
+        if let ref = toggleHotKeyRef {
+            UnregisterEventHotKey(ref)
+            toggleHotKeyRef = nil
+        }
+    }
+    
+    private func handleToggleHotKeyPressed() {
+        if state == .idle {
+            hotkeyLogger.info("TOGGLE HOTKEY - starting TOGGLE recording")
             state = .recordingToggle
-            ignoreStopUntil = Date().addingTimeInterval(0.25)
-            updateKeyStatePolling()
             DispatchQueue.main.async { [weak self] in
                 self?.onRecordingStart?()
             }
-            return nil  // Consume the key
+            return
         }
-        
-        // Hold key starts recording first; if toggle combo is pressed while holding,
-        // switch mode from hold -> toggle without restarting recording.
-        if state == .recordingHold && isToggleStartCombo {
-            hotkeyLogger.info("TOGGLE START COMBO - converting HOLD to TOGGLE recording")
-            state = .recordingToggle
-            rightOptionDownAlone = false
-            ignoreStopUntil = Date().addingTimeInterval(0.25)
-            updateKeyStatePolling()
-            return nil  // Consume the key
-        }
-        
-        // Toggle STOP key pressed during TOGGLE recording - stop
-        if keyCode == toggleStopKeyCode && state == .recordingToggle {
-            hotkeyLogger.info("TOGGLE STOP KEY - stopping TOGGLE recording")
-            state = .idle
-            updateKeyStatePolling()
-            DispatchQueue.main.async { [weak self] in
-                self?.onRecordingStop?()
-            }
-            return nil  // Consume event
-        }
-        
-        // Escape pressed during TOGGLE recording - stop
-        if keyCode == kVK_Escape && state == .recordingToggle {
-            hotkeyLogger.info("ESCAPE - stopping TOGGLE recording")
-            state = .idle
-            updateKeyStatePolling()
-            DispatchQueue.main.async { [weak self] in
-                self?.onRecordingStop?()
-            }
-            return nil  // Consume event
-        }
-        
-        return Unmanaged.passUnretained(event)
-    }
-    
-    private func handleKeyUp(keyCode: Int64, event: CGEvent) -> Unmanaged<CGEvent>? {
-        return Unmanaged.passUnretained(event)
-    }
-    
-    private func updateKeyStatePolling() {
-        let shouldPoll = state == .recordingHold || state == .recordingToggle
-        if shouldPoll {
-            if keyStatePollTimer == nil {
-                keyStatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
-                    self?.pollKeyStateFallback()
-                }
-            }
-        } else {
-            keyStatePollTimer?.invalidate()
-            keyStatePollTimer = nil
-        }
-    }
-    
-    private func pollKeyStateFallback() {
-        let mask = CGEventFlags.maskCommand.rawValue |
-                   CGEventFlags.maskAlternate.rawValue |
-                   CGEventFlags.maskShift.rawValue |
-                   CGEventFlags.maskControl.rawValue
         
         if state == .recordingHold {
-            let flags = CGEventSource.flagsState(.combinedSessionState)
-            let currentModifiers = flags.rawValue & mask
-            let requiredMods = toggleStartModifiers & mask
-            let hasRequiredModifiers = requiredMods == 0
-                ? currentModifiers == 0
-                : (currentModifiers & requiredMods) == requiredMods
-            let startKeyDown = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(toggleStartKeyCode))
-            
-            if startKeyDown && hasRequiredModifiers {
-                hotkeyLogger.info("TOGGLE START COMBO (poll fallback) - converting HOLD to TOGGLE recording")
-                state = .recordingToggle
-                rightOptionDownAlone = false
-                ignoreStopUntil = Date().addingTimeInterval(0.25)
-                updateKeyStatePolling()
-            }
+            hotkeyLogger.info("TOGGLE HOTKEY - converting HOLD to TOGGLE recording")
+            state = .recordingToggle
+            rightOptionDownAlone = false
             return
         }
         
-        guard state == .recordingToggle else {
-            updateKeyStatePolling()
-            return
-        }
-        
-        guard Date() >= ignoreStopUntil else { return }
-        
-        let stopKeyDown = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(toggleStopKeyCode))
-        let escapeDown = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Escape))
-        
-        if stopKeyDown || escapeDown {
-            hotkeyLogger.info("TOGGLE STOP (poll fallback) - stopping TOGGLE recording")
+        if state == .recordingToggle {
+            hotkeyLogger.info("TOGGLE HOTKEY - stopping TOGGLE recording")
             state = .idle
-            updateKeyStatePolling()
             DispatchQueue.main.async { [weak self] in
                 self?.onRecordingStop?()
             }
@@ -331,6 +282,25 @@ final class HotkeyMonitor {
     }
     
     // MARK: - Helpers
+    
+    private func carbonModifiersFromCGFlags(_ flags: UInt64) -> UInt32 {
+        let mask = CGEventFlags.maskCommand.rawValue |
+                   CGEventFlags.maskAlternate.rawValue |
+                   CGEventFlags.maskShift.rawValue |
+                   CGEventFlags.maskControl.rawValue
+        let filtered = flags & mask
+        
+        var carbon: UInt32 = 0
+        if (filtered & CGEventFlags.maskCommand.rawValue) != 0 { carbon |= UInt32(cmdKey) }
+        if (filtered & CGEventFlags.maskAlternate.rawValue) != 0 { carbon |= UInt32(optionKey) }
+        if (filtered & CGEventFlags.maskShift.rawValue) != 0 { carbon |= UInt32(shiftKey) }
+        if (filtered & CGEventFlags.maskControl.rawValue) != 0 { carbon |= UInt32(controlKey) }
+        return carbon
+    }
+    
+    private func fourCharCode(_ string: String) -> UInt32 {
+        string.utf8.reduce(0) { ($0 << 8) + UInt32($1) }
+    }
     
     /// Check if a modifier key is currently pressed based on flags
     private func isModifierKeyPressed(keyCode: Int64, flags: CGEventFlags) -> Bool {

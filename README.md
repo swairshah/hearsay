@@ -27,7 +27,7 @@ Or download from [Releases](https://github.com/swairshah/hearsay/releases).
 |--------|-----|
 | **Record** | Hold **Right Option (⌥)** |
 | **Transcribe** | Release the key |
-| **Toggle mode** | **Right Option + Space** to start, **Space** or **Escape** to stop |
+| **Toggle mode** | **Right Option + Space** to start/stop |
 
 Transcribed text is automatically pasted at your cursor and copied to clipboard.
 

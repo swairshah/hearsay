@@ -73,10 +73,8 @@ private class SettingsTabView: NSView {
     private let shortcutsBox = NSBox()
     private let holdKeyLabel = NSTextField(labelWithString: "Hold to Record")
     private var holdKeyRecorder: ShortcutRecorderView!
-    private let toggleStartLabel = NSTextField(labelWithString: "Toggle Start")
+    private let toggleStartLabel = NSTextField(labelWithString: "Toggle Record")
     private var toggleStartRecorder: ShortcutRecorderView!
-    private let toggleStopLabel = NSTextField(labelWithString: "Toggle Stop")
-    private var toggleStopRecorder: ShortcutRecorderView!
     private let resetButton = NSButton(title: "Reset to Defaults", target: nil, action: nil)
     
     override init(frame: NSRect) {
@@ -118,7 +116,7 @@ private class SettingsTabView: NSView {
         shortcutsBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
         addSubview(shortcutsBox)
         
-        for label in [holdKeyLabel, toggleStartLabel, toggleStopLabel] {
+        for label in [holdKeyLabel, toggleStartLabel] {
             label.font = .systemFont(ofSize: 12)
             label.alignment = .right
             shortcutsBox.contentView?.addSubview(label)
@@ -136,12 +134,6 @@ private class SettingsTabView: NSView {
             self?.onHotkeyChanged?()
         }
         shortcutsBox.contentView?.addSubview(toggleStartRecorder)
-        
-        toggleStopRecorder = ShortcutRecorderView(captureMode: .singleKey, placeholder: "Click to set") { [weak self] s in
-            UserDefaults.standard.set(s.keyCode, forKey: "toggleStopKeyCode")
-            self?.onHotkeyChanged?()
-        }
-        shortcutsBox.contentView?.addSubview(toggleStopRecorder)
         
         resetButton.bezelStyle = .rounded
         resetButton.controlSize = .small
@@ -161,11 +153,6 @@ private class SettingsTabView: NSView {
         toggleStartRecorder.setShortcut(Shortcut(
             keyCode: UserDefaults.standard.object(forKey: "toggleStartKeyCode") as? Int ?? 49,
             modifiers: UInt(UserDefaults.standard.object(forKey: "toggleStartModifiers") as? Int ?? Int(NSEvent.ModifierFlags.option.rawValue))
-        ))
-        
-        toggleStopRecorder.setShortcut(Shortcut(
-            keyCode: UserDefaults.standard.object(forKey: "toggleStopKeyCode") as? Int ?? 49,
-            modifiers: 0
         ))
     }
     
@@ -195,7 +182,7 @@ private class SettingsTabView: NSView {
         y -= 66
         
         // Shortcuts box
-        shortcutsBox.frame = NSRect(x: pad, y: y - 140, width: boxW, height: 140)
+        shortcutsBox.frame = NSRect(x: pad, y: y - 108, width: boxW, height: 108)
         layoutShortcutsBox()
     }
     
@@ -212,10 +199,6 @@ private class SettingsTabView: NSView {
         
         toggleStartLabel.frame = NSRect(x: 8, y: y, width: labelW, height: 20)
         toggleStartRecorder.frame = NSRect(x: inputX, y: y - 2, width: inputW, height: 24)
-        y -= 32
-        
-        toggleStopLabel.frame = NSRect(x: 8, y: y, width: labelW, height: 20)
-        toggleStopRecorder.frame = NSRect(x: inputX, y: y - 2, width: inputW, height: 24)
         
         resetButton.sizeToFit()
         resetButton.frame.origin = NSPoint(x: inputX + inputW + 16, y: cv.bounds.height - 34)
@@ -231,7 +214,6 @@ private class SettingsTabView: NSView {
         UserDefaults.standard.set(61, forKey: "holdKeyCode")
         UserDefaults.standard.set(49, forKey: "toggleStartKeyCode")
         UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "toggleStartModifiers")
-        UserDefaults.standard.set(49, forKey: "toggleStopKeyCode")
         loadSettings()
         onHotkeyChanged?()
     }

@@ -25,6 +25,9 @@ if [ ! -d "Hearsay.xcodeproj" ] || [ "project.yml" -nt "Hearsay.xcodeproj" ]; th
     xcodegen generate
 fi
 
+# Remove old qwen_asr from bundle (prevents codesign failure)
+rm -f "$APP_PATH/Contents/MacOS/qwen_asr" 2>/dev/null || true
+
 # Build
 echo -e "${YELLOW}Building...${NC}"
 xcodebuild -project Hearsay.xcodeproj \
@@ -39,10 +42,13 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
-# Copy qwen_asr binary into app bundle
+# Copy qwen_asr binary into app bundle and re-sign
 if [ -f "$BINARY_SRC" ]; then
     echo -e "${YELLOW}Bundling qwen_asr binary...${NC}"
     cp "$BINARY_SRC" "$APP_PATH/Contents/MacOS/"
+    # Sign the binary and re-sign the whole app bundle
+    codesign --force --sign - "$APP_PATH/Contents/MacOS/qwen_asr"
+    codesign --force --sign - "$APP_PATH"
 else
     echo -e "${RED}Warning: qwen_asr binary not found at $BINARY_SRC${NC}"
     echo "Build it first: cd ~/work/misc/qwen-asr && make blas"

@@ -70,13 +70,15 @@ final class HotkeyMonitor {
                                       (1 << CGEventType.keyUp.rawValue)
         
         // Create event tap
+        // Use listenOnly for safety - we observe events but don't block them
+        // This prevents system hangs if our callback has issues
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,
+            options: .listenOnly,  // Changed from .defaultTap for safety
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
                 return monitor.handleEvent(type: type, event: event)
             },
@@ -113,10 +115,18 @@ final class HotkeyMonitor {
         // Handle tap disabled (system can disable it under heavy load)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             hotkeyLogger.warning("Event tap was disabled, re-enabling...")
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
+            // Re-enable after a short delay to avoid rapid re-enable loops
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                if let tap = self?.eventTap {
+                    CGEvent.tapEnable(tap: tap, enable: true)
+                }
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
+        }
+        
+        // Safety: always pass through events we don't understand
+        guard type == .flagsChanged || type == .keyDown || type == .keyUp else {
+            return Unmanaged.passUnretained(event)
         }
         
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -129,7 +139,7 @@ final class HotkeyMonitor {
         }
         
         // Handle modifier flags changed
-        guard type == .flagsChanged else { return Unmanaged.passRetained(event) }
+        guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
         
         let flags = event.flags
         let optionPressed = flags.contains(.maskAlternate)
@@ -196,7 +206,7 @@ final class HotkeyMonitor {
             }
         }
         
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
     
     private func handleKeyDown(keyCode: Int64, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -236,11 +246,11 @@ final class HotkeyMonitor {
             return nil  // Consume event
         }
         
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
     
     private func handleKeyUp(keyCode: Int64, event: CGEvent) -> Unmanaged<CGEvent>? {
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
     
     // MARK: - Helpers

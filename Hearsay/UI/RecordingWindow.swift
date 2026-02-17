@@ -1,8 +1,14 @@
 import AppKit
+import os.log
+
+private let logger = Logger(subsystem: "com.swair.hearsay", category: "window")
 
 /// Floating borderless window that displays the recording indicator.
 /// Appears near the bottom center of the active screen.
 final class RecordingWindow: NSPanel {
+    
+    /// Counter to track animation generations and prevent race conditions
+    private var animationGeneration: Int = 0
     
     init() {
         super.init(
@@ -46,26 +52,47 @@ final class RecordingWindow: NSPanel {
     // MARK: - Animation
     
     func fadeIn() {
+        // Increment generation to cancel any pending fadeOut completion
+        animationGeneration += 1
+        let currentGeneration = animationGeneration
+        
+        logger.debug("fadeIn called (generation \(currentGeneration))")
+        
         positionOnScreen(width: Constants.indicatorWidth)
         
+        // Cancel any ongoing animations
+        animator().alphaValue = alphaValue
+        
         // Ensure window is visible and on top
-        alphaValue = 0
         orderFrontRegardless()
         
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Constants.indicatorFadeIn
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            animator().alphaValue = 1
+            self.animator().alphaValue = 1
         }
     }
     
     func fadeOut(completion: (() -> Void)? = nil) {
+        // Capture current generation to check in completion handler
+        let currentGeneration = animationGeneration
+        
+        logger.debug("fadeOut called (generation \(currentGeneration))")
+        
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Constants.indicatorFadeOut
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            animator().alphaValue = 0
-        }, completionHandler: {
-            self.orderOut(nil)
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self = self else { return }
+            
+            // Only order out if no new fadeIn was called during animation
+            if self.animationGeneration == currentGeneration {
+                logger.debug("fadeOut completing - ordering out (generation \(currentGeneration))")
+                self.orderOut(nil)
+            } else {
+                logger.debug("fadeOut cancelled - generation changed from \(currentGeneration) to \(self.animationGeneration)")
+            }
             completion?()
         })
     }

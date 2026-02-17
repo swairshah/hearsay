@@ -27,15 +27,22 @@ final class HotkeyMonitor {
     private(set) var state: State = .idle
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var holdPollingTimer: Timer?
+    private var tapRecoveryWorkItem: DispatchWorkItem?
+    private var tapDisableTimestamps: [Date] = []
+    private var tapRecoveryAttempts = 0
     
     private var hotKeyHandler: EventHandlerRef?
     private var toggleHotKeyRef: EventHotKeyRef?
     private let toggleHotKeyID: UInt32 = 1
     
+    private let tapDisableWindow: TimeInterval = 10.0
+    private let maxTapDisableEventsBeforeRestart = 3
+    private let maxTapRecoveryAttemptsBeforeRestart = 5
+    
     // Track if hold key is held alone (no other modifiers/keys)
     private var rightOptionDownAlone = false
-    // Track if hold key is currently held
-    private var rightOptionHeld = false
+    private var holdModifierWasPressed = false
     
     init() {
         loadSettings()
@@ -57,7 +64,7 @@ final class HotkeyMonitor {
         toggleStopKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStopKeyCode") as? Int ?? 49)
         hotkeyLogger.info("Hotkeys loaded: hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), toggleStop=\(self.toggleStopKeyCode)")
         
-        if eventTap != nil {
+        if hotKeyHandler != nil {
             registerToggleHotKey()
         }
     }
@@ -65,24 +72,53 @@ final class HotkeyMonitor {
     // MARK: - Public
     
     func start() -> Bool {
+        installHotKeyHandlerIfNeeded()
+        
+        if toggleHotKeyRef == nil {
+            registerToggleHotKey()
+        }
+        
+        startHoldPolling()
+        
         guard eventTap == nil else {
-            hotkeyLogger.info("Event tap already exists")
             return true
         }
-        guard Self.hasAccessibilityPermission else {
-            hotkeyLogger.error("Cannot start hotkey monitor - Accessibility permission not granted")
-            return false
+        
+        hotkeyLogger.info("Creating hold-mode event tap...")
+        if createAndStartEventTap() {
+            return true
         }
         
-        hotkeyLogger.info("Creating event tap...")
+        if !Self.hasAccessibilityPermission {
+            hotkeyLogger.warning("Hold event tap unavailable (accessibility not granted) - toggle hotkey remains active")
+            return true
+        }
         
+        hotkeyLogger.error("Failed to create hold event tap despite accessibility permission")
+        return false
+    }
+    
+    func stop() {
+        cancelTapRecovery()
+        holdPollingTimer?.invalidate()
+        holdPollingTimer = nil
+        destroyEventTap()
+        unregisterToggleHotKey()
+        holdModifierWasPressed = false
+        rightOptionDownAlone = false
+        state = .idle
+    }
+    
+    // MARK: - Event Tap Lifecycle
+    
+    private func createAndStartEventTap() -> Bool {
         // Hold mode relies on modifier transitions only.
         let eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
         
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
+            place: .tailAppendEventTap,
+            options: .listenOnly,
             eventsOfInterest: eventMask,
             callback: { (_, type, event, refcon) -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
@@ -100,65 +136,149 @@ final class HotkeyMonitor {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         
-        installHotKeyHandlerIfNeeded()
-        registerToggleHotKey()
+        tapRecoveryAttempts = 0
+        tapDisableTimestamps.removeAll()
         
         hotkeyLogger.info("Event tap started - listening for hold key \(self.holdKeyCode) and toggle combo")
         return true
     }
     
-    func stop() {
+    private func destroyEventTap() {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             if let source = runLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
             }
         }
-        unregisterToggleHotKey()
         eventTap = nil
         runLoopSource = nil
-        state = .idle
+    }
+    
+    private func cancelTapRecovery() {
+        tapRecoveryWorkItem?.cancel()
+        tapRecoveryWorkItem = nil
+        tapRecoveryAttempts = 0
+        tapDisableTimestamps.removeAll()
+    }
+    
+    private func restartEventTap(reason: String) {
+        tapRecoveryWorkItem?.cancel()
+        
+        let delay: TimeInterval = min(0.5 * pow(2.0, Double(max(0, tapRecoveryAttempts - 1))), 3.0)
+        hotkeyLogger.warning("Restarting hold event tap in \(delay)s (\(reason), attempt \(self.tapRecoveryAttempts))")
+        
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.destroyEventTap()
+            
+            guard Self.hasAccessibilityPermission else {
+                hotkeyLogger.error("Skipping hold event tap restart - accessibility permission missing")
+                return
+            }
+            
+            if self.createAndStartEventTap() {
+                hotkeyLogger.info("Hold event tap restart succeeded")
+            } else {
+                self.tapRecoveryAttempts += 1
+                self.restartEventTap(reason: "restart failed")
+            }
+        }
+        
+        tapRecoveryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+    
+    private func startHoldPolling() {
+        if holdPollingTimer != nil { return }
+        
+        let initialFlags = CGEventSource.flagsState(.combinedSessionState)
+        holdModifierWasPressed = isHoldKeyDownInSessionState(flags: initialFlags)
+        
+        holdPollingTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+            self?.pollHoldState()
+        }
+    }
+    
+    private func pollHoldState() {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        let holdKeyDown = isHoldKeyDownInSessionState(flags: flags)
+        let holdJustPressed = holdKeyDown && !holdModifierWasPressed
+        let holdJustReleased = !holdKeyDown && holdModifierWasPressed
+        defer { holdModifierWasPressed = holdKeyDown }
+        
+        let otherModifiers = hasOtherModifierFlags(flags, excludingHoldKeyCode: holdKeyCode)
+        
+        if state == .idle {
+            if holdJustPressed && !otherModifiers {
+                hotkeyLogger.info("HOLD KEY DOWN (poll) - starting HOLD recording")
+                rightOptionDownAlone = true
+                state = .recordingHold
+                DispatchQueue.main.async { [weak self] in
+                    self?.onRecordingStart?()
+                }
+            }
+            return
+        }
+        
+        if state == .recordingHold {
+            if holdJustReleased {
+                hotkeyLogger.info("HOLD KEY UP (poll) - stopping HOLD recording")
+                rightOptionDownAlone = false
+                state = .idle
+                DispatchQueue.main.async { [weak self] in
+                    self?.onRecordingStop?()
+                }
+            } else if otherModifiers && rightOptionDownAlone {
+                hotkeyLogger.info("Other modifier pressed (poll) - canceling HOLD recording")
+                rightOptionDownAlone = false
+                state = .idle
+                DispatchQueue.main.async { [weak self] in
+                    self?.onRecordingStop?()
+                }
+            }
+            return
+        }
+        
+        if state == .recordingToggle && holdJustReleased {
+            rightOptionDownAlone = false
+        }
     }
     
     // MARK: - Event Handling
     
     private func handleEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            hotkeyLogger.warning("Event tap was disabled, re-enabling...")
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-            }
+            handleTapDisabled(type: type)
             return Unmanaged.passUnretained(event)
         }
         
         guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
         
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
-        let optionPressed = flags.contains(.maskAlternate)
         let otherModifiers = flags.contains(.maskCommand) ||
                              flags.contains(.maskControl) ||
                              flags.contains(.maskShift)
         
-        hotkeyLogger.debug("FlagsChanged: keyCode=\(keyCode), option=\(optionPressed), otherMods=\(otherModifiers), state=\(String(describing: self.state))")
-        
         let holdKeyIsPressed = isModifierKeyPressed(keyCode: holdKeyCode, flags: flags)
+        let holdJustPressed = holdKeyIsPressed && !holdModifierWasPressed
+        let holdJustReleased = !holdKeyIsPressed && holdModifierWasPressed
+        defer { holdModifierWasPressed = holdKeyIsPressed }
         
         if state == .idle {
-            if keyCode == holdKeyCode && holdKeyIsPressed && !otherModifiers {
+            // Use modifier transition rather than strict keycode equality.
+            // This is more reliable across keyboards/layouts for right-side modifiers.
+            if holdJustPressed && !otherModifiers {
                 hotkeyLogger.info("HOLD KEY DOWN - starting HOLD recording")
                 rightOptionDownAlone = true
-                rightOptionHeld = true
                 state = .recordingHold
                 DispatchQueue.main.async { [weak self] in
                     self?.onRecordingStart?()
                 }
             }
         } else if state == .recordingHold {
-            if keyCode == holdKeyCode && !holdKeyIsPressed {
+            if holdJustReleased {
                 hotkeyLogger.info("HOLD KEY UP - stopping HOLD recording")
                 rightOptionDownAlone = false
-                rightOptionHeld = false
                 state = .idle
                 DispatchQueue.main.async { [weak self] in
                     self?.onRecordingStop?()
@@ -166,19 +286,46 @@ final class HotkeyMonitor {
             } else if otherModifiers && rightOptionDownAlone {
                 hotkeyLogger.info("Other modifier pressed - canceling HOLD recording")
                 rightOptionDownAlone = false
-                rightOptionHeld = false
                 state = .idle
                 DispatchQueue.main.async { [weak self] in
                     self?.onRecordingStop?()
                 }
             }
         } else if state == .recordingToggle {
-            if keyCode == holdKeyCode && !holdKeyIsPressed {
-                rightOptionHeld = false
+            if holdJustReleased {
+                rightOptionDownAlone = false
             }
         }
         
         return Unmanaged.passUnretained(event)
+    }
+    
+    private func handleTapDisabled(type: CGEventType) {
+        let now = Date()
+        tapDisableTimestamps.append(now)
+        tapDisableTimestamps.removeAll { now.timeIntervalSince($0) > tapDisableWindow }
+        tapRecoveryAttempts += 1
+        
+        let tooManyDisableEvents = tapDisableTimestamps.count >= maxTapDisableEventsBeforeRestart
+        let tooManyAttempts = tapRecoveryAttempts >= maxTapRecoveryAttemptsBeforeRestart
+        
+        if tooManyDisableEvents || tooManyAttempts {
+            restartEventTap(reason: "tap disabled repeatedly (\(type.rawValue))")
+            return
+        }
+        
+        let delay: TimeInterval = min(0.05 * pow(2.0, Double(max(0, tapRecoveryAttempts - 1))), 0.5)
+        hotkeyLogger.warning("Event tap disabled (\(type.rawValue)); re-enabling in \(delay)s (attempt \(self.tapRecoveryAttempts))")
+        
+        tapRecoveryWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            if let tap = self.eventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+        }
+        tapRecoveryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
     
     // MARK: - Carbon Hotkey
@@ -230,7 +377,7 @@ final class HotkeyMonitor {
         guard toggleStartKeyCode > 0 else { return }
         
         let carbonModifiers = carbonModifiersFromCGFlags(toggleStartModifiers)
-        var hotKeyID = EventHotKeyID(signature: fourCharCode("HSY1"), id: toggleHotKeyID)
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("HSY1"), id: toggleHotKeyID)
         
         let status = RegisterEventHotKey(
             UInt32(toggleStartKeyCode),
@@ -315,6 +462,26 @@ final class HotkeyMonitor {
             return flags.contains(.maskShift)
         default:
             return false
+        }
+    }
+    
+    private func hasOtherModifierFlags(_ flags: CGEventFlags, excludingHoldKeyCode keyCode: Int64) -> Bool {
+        var others: CGEventFlags = []
+        
+        if ![54, 55].contains(keyCode) { others.insert(.maskCommand) }
+        if ![58, 61].contains(keyCode) { others.insert(.maskAlternate) }
+        if ![56, 60].contains(keyCode) { others.insert(.maskShift) }
+        if ![59, 62].contains(keyCode) { others.insert(.maskControl) }
+        
+        return flags.intersection(others).isEmpty == false
+    }
+    
+    private func isHoldKeyDownInSessionState(flags: CGEventFlags) -> Bool {
+        switch holdKeyCode {
+        case 54, 55, 56, 58, 59, 60, 61, 62:
+            return isModifierKeyPressed(keyCode: holdKeyCode, flags: flags)
+        default:
+            return CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(holdKeyCode))
         }
     }
     

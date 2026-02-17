@@ -163,14 +163,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionRetryCount = 0
     
     private func tryStartHotkeyMonitor() {
-        // Gate startup on actual trust state so we don't run in a non-functional
-        // "started" state without global hotkey events.
+        if !hotkeyMonitor.start() {
+            permissionRetryCount += 1
+            
+            if permissionRetryCount == 1 {
+                logger.warning("Hotkey monitor failed to start, retrying...")
+            }
+            
+            if permissionRetryCount == 5 {
+                DispatchQueue.main.async {
+                    self.showAccessibilityHelp()
+                }
+            }
+            
+            if permissionCheckTimer == nil {
+                permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                    self?.tryStartHotkeyMonitor()
+                }
+            }
+            return
+        }
+        
         let hasAccessibility = PermissionsManager.checkAccessibility() == .granted
         if !hasAccessibility {
             permissionRetryCount += 1
             
             if permissionRetryCount == 1 {
-                logger.info("Need accessibility permission, requesting...")
+                logger.info("Accessibility permission missing - toggle hotkey active, requesting permission for hold hotkey")
                 NSApp.activate(ignoringOtherApps: true)
                 PermissionsManager.requestAccessibility()
             }
@@ -189,33 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
-        // Try to start - if it works, we have permission
-        if hotkeyMonitor.start() {
-            logger.info("Hotkey monitor started successfully")
-            permissionCheckTimer?.invalidate()
-            permissionCheckTimer = nil
-            permissionRetryCount = 0
-            return
-        }
-        
-        // Failed to start even though permission was reported as granted.
-        permissionRetryCount += 1
-        
-        if permissionRetryCount == 1 {
-            logger.warning("Hotkey monitor failed to start despite granted permission, retrying...")
-        }
-        
-        if permissionRetryCount == 5 {
-            DispatchQueue.main.async {
-                self.showAccessibilityHelp()
-            }
-        }
-        
-        if permissionCheckTimer == nil {
-            permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                self?.tryStartHotkeyMonitor()
-            }
-        }
+        logger.info("Hotkey monitor started successfully")
+        permissionCheckTimer?.invalidate()
+        permissionCheckTimer = nil
+        permissionRetryCount = 0
     }
     
     private func showAccessibilityHelp() {

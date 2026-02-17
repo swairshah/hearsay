@@ -87,7 +87,10 @@ private class SettingsTabView: NSView {
     
     private func setupUI() {
         // Header
-        if let icon = NSImage(named: NSImage.applicationIconName) {
+        if let settingsIconURL = Bundle.main.url(forResource: "settings-icon", withExtension: "png"),
+           let icon = NSImage(contentsOf: settingsIconURL) {
+            iconView.image = icon
+        } else if let icon = NSImage(named: NSImage.applicationIconName) {
             iconView.image = icon
         }
         iconView.imageScaling = .scaleProportionallyUpOrDown

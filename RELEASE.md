@@ -6,13 +6,19 @@ Update `Hearsay/Info.plist`:
 - `CFBundleShortVersionString` — user-facing version (e.g., `1.0.4`)
 - `CFBundleVersion` — increment build number
 
-## 2. Build
+## 2. Build (Universal Binary)
 
 ```bash
 xcodegen generate
-xcodebuild -project Hearsay.xcodeproj -scheme Hearsay -configuration Release build
+xcodebuild -project Hearsay.xcodeproj -scheme Hearsay -configuration Release \
+  ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+  clean build
 mkdir -p dist
 cp -R ~/Library/Developer/Xcode/DerivedData/Hearsay-*/Build/Products/Release/Hearsay.app dist/
+
+# Verify universal binary
+file dist/Hearsay.app/Contents/MacOS/Hearsay
+# Should show: Mach-O universal binary with 2 architectures: [x86_64] [arm64]
 ```
 
 ## 3. Bundle qwen_asr binary

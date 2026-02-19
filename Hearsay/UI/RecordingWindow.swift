@@ -36,7 +36,9 @@ final class RecordingWindow: NSPanel {
     // MARK: - Positioning
     
     func positionOnScreen(width: CGFloat? = nil) {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let mouseLocation = NSEvent.mouseLocation
+        let targetScreen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+        guard let screen = targetScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         
         let screenFrame = screen.visibleFrame
         let newWidth = width ?? frame.size.width

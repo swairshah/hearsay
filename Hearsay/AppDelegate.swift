@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     private var isRecording = false
     private var currentModelPath: String?
+    private var indicatorDismissWorkItem: DispatchWorkItem?
     
     // MARK: - Lifecycle
     
@@ -51,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyMonitor?.stop()
+        indicatorDismissWorkItem?.cancel()
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -297,6 +299,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isRecording = true
         logger.info("Starting recording...")
         
+        // Cancel any pending dismiss from previous transcription/error
+        cancelPendingIndicatorDismiss()
+        
         // Update UI
         recordingIndicator.setState(.recording)
         recordingWindow.fadeIn()
@@ -399,10 +404,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return Double(audioBytes) / 32000.0
     }
     
-    private func dismissIndicatorAfterDelay() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + Constants.doneDisplayDuration) { [weak self] in
-            self?.recordingWindow.fadeOut()
+    private func cancelPendingIndicatorDismiss() {
+        indicatorDismissWorkItem?.cancel()
+        indicatorDismissWorkItem = nil
+    }
+    
+    private func scheduleIndicatorDismiss(after delay: TimeInterval) {
+        cancelPendingIndicatorDismiss()
+        
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            
+            // Never hide while actively recording
+            if self.isRecording {
+                logger.debug("Skipping indicator dismiss because recording is active")
+                return
+            }
+            
+            self.recordingWindow.fadeOut()
+            self.indicatorDismissWorkItem = nil
         }
+        
+        indicatorDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+    
+    private func dismissIndicatorAfterDelay() {
+        scheduleIndicatorDismiss(after: Constants.doneDisplayDuration)
     }
     
     // MARK: - Error Handling
@@ -410,10 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showError(_ message: String) {
         recordingIndicator.setState(.error(message))
         recordingWindow.fadeIn()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.recordingWindow.fadeOut()
-        }
+        scheduleIndicatorDismiss(after: 2.0)
     }
     
     // MARK: - Windows

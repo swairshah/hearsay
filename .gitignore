@@ -31,3 +31,4 @@ Hearsay.xcodeproj/
 # Credentials/secrets
 *.pem
 *.p12
+dist/

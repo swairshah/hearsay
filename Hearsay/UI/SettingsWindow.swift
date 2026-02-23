@@ -87,6 +87,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         onWindowClosed?()
     }
+    
+    func windowDidResignKey(_ notification: Notification) {
+        // Restart hotkey monitor when settings window loses focus
+        onWindowClosed?()
+    }
+    
+    func windowDidBecomeKey(_ notification: Notification) {
+        // Stop hotkey monitor when settings window gains focus (for shortcut recording)
+        onWindowOpened?()
+    }
 }
 
 // MARK: - Settings Tab

@@ -99,12 +99,6 @@ final class StatusBarController {
         allHistoryItem.isEnabled = true
         menu.addItem(allHistoryItem)
         
-        // Clear history
-        let clearHistoryItem = NSMenuItem(title: "Clear History", action: #selector(clearHistory(_:)), keyEquivalent: "")
-        clearHistoryItem.target = self
-        clearHistoryItem.isEnabled = true
-        menu.addItem(clearHistoryItem)
-        
         menu.addItem(.separator())
         
         // Settings
@@ -226,19 +220,6 @@ final class StatusBarController {
     @objc private func copyHistoryItem(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? TranscriptionItem else { return }
         onCopyHistoryItem?(item)
-    }
-    
-    @objc private func clearHistory(_ sender: NSMenuItem) {
-        let alert = NSAlert()
-        alert.messageText = "Clear History?"
-        alert.informativeText = "This will delete all transcription history. This cannot be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Clear")
-        alert.addButton(withTitle: "Cancel")
-        
-        if alert.runModal() == .alertFirstButtonReturn {
-            HistoryStore.shared.clear()
-        }
     }
     
     @objc private func showHelp(_ sender: NSMenuItem) {

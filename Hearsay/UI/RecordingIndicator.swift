@@ -386,11 +386,13 @@ private class FigureCountView: NSView {
     }
     
     private var lineLayers: [CALayer] = []
+    private var borderLayers: [CALayer] = []
     private let maxLines = 9  // Cap visual at 9 lines
     
     private let lineWidth: CGFloat = 2
     private let lineHeight: CGFloat = 14
     private let lineSpacing: CGFloat = 4
+    private let borderWidth: CGFloat = 2  // Black border thickness
     
     /// Calculate ideal width based on count
     var idealWidth: CGFloat {
@@ -398,7 +400,8 @@ private class FigureCountView: NSView {
             return 0  // Nothing to show
         }
         let linesShown = min(count, maxLines)
-        return CGFloat(linesShown) * lineWidth + CGFloat(linesShown - 1) * lineSpacing
+        let totalLineWidth = lineWidth + borderWidth * 2  // Line + border on each side
+        return CGFloat(linesShown) * totalLineWidth + CGFloat(linesShown - 1) * lineSpacing
     }
     
     override init(frame frameRect: NSRect) {
@@ -416,15 +419,27 @@ private class FigureCountView: NSView {
     }
     
     private func updateLines() {
-        // Remove existing lines
+        // Remove existing layers
         for line in lineLayers {
             line.removeFromSuperlayer()
         }
+        for border in borderLayers {
+            border.removeFromSuperlayer()
+        }
         lineLayers.removeAll()
+        borderLayers.removeAll()
         
-        // Create new lines
+        // Create new lines with borders
         let linesShown = min(count, maxLines)
         for _ in 0..<linesShown {
+            // Black border layer (behind)
+            let border = CALayer()
+            border.backgroundColor = NSColor.black.cgColor
+            border.cornerRadius = (lineWidth + borderWidth * 2) / 2
+            layer?.addSublayer(border)
+            borderLayers.append(border)
+            
+            // White line layer (front)
             let line = CALayer()
             line.backgroundColor = NSColor.white.cgColor
             line.cornerRadius = lineWidth / 2
@@ -439,12 +454,18 @@ private class FigureCountView: NSView {
         super.layout()
         
         // Position lines centered
+        let totalLineWidth = lineWidth + borderWidth * 2
+        let totalLineHeight = lineHeight + borderWidth * 2
         let lineY = (bounds.height - lineHeight) / 2
+        let borderY = (bounds.height - totalLineHeight) / 2
         var x: CGFloat = 0
         
-        for line in lineLayers {
-            line.frame = NSRect(x: x, y: lineY, width: lineWidth, height: lineHeight)
-            x += lineWidth + lineSpacing
+        for i in 0..<lineLayers.count {
+            // Position border (slightly larger, behind)
+            borderLayers[i].frame = NSRect(x: x, y: borderY, width: totalLineWidth, height: totalLineHeight)
+            // Position white line (centered on border)
+            lineLayers[i].frame = NSRect(x: x + borderWidth, y: lineY, width: lineWidth, height: lineHeight)
+            x += totalLineWidth + lineSpacing
         }
     }
 }

@@ -116,7 +116,14 @@ private class PermissionsContentView: NSView {
             buttonTitle: "Allow",
             onAction: { [weak self] in
                 Task {
-                    await PermissionsManager.requestMicrophone()
+                    switch PermissionsManager.checkMicrophone() {
+                    case .notDetermined:
+                        _ = await PermissionsManager.requestMicrophone()
+                    case .denied:
+                        PermissionsManager.openMicrophoneSettings()
+                    case .granted:
+                        break
+                    }
                     await MainActor.run {
                         self?.updatePermissionStates()
                     }
@@ -130,6 +137,9 @@ private class PermissionsContentView: NSView {
             buttonTitle: "Open Settings",
             onAction: {
                 PermissionsManager.requestAccessibility()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    PermissionsManager.openAccessibilitySettings()
+                }
             }
         )
         

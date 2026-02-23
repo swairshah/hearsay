@@ -15,6 +15,7 @@ final class StatusBarController {
     var onToggleEnabled: ((Bool) -> Void)?
     var onShowHistory: (() -> Void)?
     var onShowSettings: (() -> Void)?
+    var onShowPermissions: (() -> Void)?
     var onShowOnboarding: (() -> Void)?
     var onCopyHistoryItem: ((TranscriptionItem) -> Void)?
     var onQuit: (() -> Void)?
@@ -78,6 +79,11 @@ final class StatusBarController {
         modelsMenuItem.target = self
         modelsMenuItem.isEnabled = true
         menu.addItem(modelsMenuItem)
+        
+        let permissionsItem = NSMenuItem(title: "Permissions...", action: #selector(showPermissions(_:)), keyEquivalent: "")
+        permissionsItem.target = self
+        permissionsItem.isEnabled = true
+        menu.addItem(permissionsItem)
         
         menu.addItem(.separator())
         
@@ -207,6 +213,10 @@ final class StatusBarController {
     
     @objc private func showSettings(_ sender: NSMenuItem) {
         onShowSettings?()
+    }
+    
+    @objc private func showPermissions(_ sender: NSMenuItem) {
+        onShowPermissions?()
     }
     
     @objc private func showOnboarding(_ sender: NSMenuItem) {

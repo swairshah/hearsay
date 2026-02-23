@@ -1,8 +1,14 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Settings window with tabs for Settings and History
+/// Settings window with tabs for Settings, History, and Permissions
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+    
+    enum Tab {
+        case settings
+        case history
+        case permissions
+    }
     
     var onHotkeyChanged: (() -> Void)?
     var onWindowOpened: (() -> Void)?
@@ -11,6 +17,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let tabView = NSTabView()
     private var settingsTab: SettingsTabView!
     private var historyTab: HistoryTabView!
+    private var permissionsTab: PermissionsTabView!
     
     convenience init() {
         let window = NSWindow(
@@ -50,10 +57,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         historyItem.label = "History"
         historyItem.view = historyTab
         tabView.addTabViewItem(historyItem)
+        
+        // Permissions tab
+        permissionsTab = PermissionsTabView(frame: NSRect(x: 0, y: 0, width: 440, height: 380))
+        let permissionsItem = NSTabViewItem(identifier: "permissions")
+        permissionsItem.label = "Permissions"
+        permissionsItem.view = permissionsTab
+        tabView.addTabViewItem(permissionsItem)
     }
     
-    func show() {
+    func show(tab: Tab = .settings) {
         historyTab.refresh()
+        permissionsTab.refresh()
+        
+        switch tab {
+        case .settings:
+            tabView.selectTabViewItem(withIdentifier: "settings")
+        case .history:
+            tabView.selectTabViewItem(withIdentifier: "history")
+        case .permissions:
+            tabView.selectTabViewItem(withIdentifier: "permissions")
+        }
+        
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         onWindowOpened?()
@@ -226,6 +251,245 @@ private class SettingsTabView: NSView {
         UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "toggleStartModifiers")
         loadSettings()
         onHotkeyChanged?()
+    }
+}
+
+// MARK: - Permissions Tab
+
+private class PermissionsTabView: NSView {
+    
+    private let titleLabel = NSTextField(labelWithString: "Permissions")
+    private let subtitleLabel = NSTextField(labelWithString: "Grant or review permissions anytime.")
+    private let stack = NSStackView()
+    private let noteLabel = NSTextField(labelWithString: "Screen Recording may require restarting Hearsay after granting.")
+    
+    private var microphoneRow: PermissionStatusRowView!
+    private var accessibilityRow: PermissionStatusRowView!
+    private var screenRecordingRow: PermissionStatusRowView!
+    private var refreshTimer: Timer?
+    
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        startTimer()
+        refresh()
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    deinit {
+        refreshTimer?.invalidate()
+    }
+    
+    private func setupUI() {
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+        
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        addSubview(subtitleLabel)
+        
+        microphoneRow = PermissionStatusRowView(
+            title: "Microphone",
+            description: "Records your voice for transcription",
+            buttonTitle: "Allow"
+        ) {
+            Task {
+                switch PermissionsManager.checkMicrophone() {
+                case .notDetermined:
+                    _ = await PermissionsManager.requestMicrophone()
+                case .denied:
+                    PermissionsManager.openMicrophoneSettings()
+                case .granted:
+                    break
+                }
+            }
+        }
+        
+        accessibilityRow = PermissionStatusRowView(
+            title: "Accessibility",
+            description: "Needed for global hotkeys and paste",
+            buttonTitle: "Open Settings"
+        ) {
+            PermissionsManager.requestAccessibility()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                PermissionsManager.openAccessibilitySettings()
+            }
+        }
+        
+        screenRecordingRow = PermissionStatusRowView(
+            title: "Screen Recording",
+            description: "Needed for Option+4 figure screenshots",
+            buttonTitle: "Open Settings",
+            note: "May need app restart after granting"
+        ) {
+            PermissionsManager.requestScreenRecording()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                PermissionsManager.openScreenRecordingSettings()
+            }
+        }
+        
+        stack.orientation = .vertical
+        stack.spacing = 12
+        stack.addArrangedSubview(microphoneRow)
+        stack.addArrangedSubview(accessibilityRow)
+        stack.addArrangedSubview(screenRecordingRow)
+        addSubview(stack)
+        
+        noteLabel.font = .systemFont(ofSize: 11)
+        noteLabel.textColor = .tertiaryLabelColor
+        noteLabel.alignment = .center
+        addSubview(noteLabel)
+    }
+    
+    private func startTimer() {
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+    
+    func refresh() {
+        microphoneRow.setGranted(PermissionsManager.checkMicrophone() == .granted)
+        accessibilityRow.setGranted(PermissionsManager.checkAccessibility() == .granted)
+        screenRecordingRow.setGranted(PermissionsManager.checkScreenRecording() == .granted)
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        var y = bounds.height - 22
+        titleLabel.frame = NSRect(x: 20, y: y - 24, width: bounds.width - 40, height: 24)
+        y -= 30
+        subtitleLabel.frame = NSRect(x: 20, y: y - 18, width: bounds.width - 40, height: 18)
+        y -= 24
+        
+        let stackWidth = bounds.width - 40
+        let stackHeight: CGFloat = 220
+        stack.frame = NSRect(x: 20, y: y - stackHeight, width: stackWidth, height: stackHeight)
+        y -= stackHeight + 8
+        
+        noteLabel.frame = NSRect(x: 20, y: max(12, y - 16), width: bounds.width - 40, height: 16)
+    }
+}
+
+private class PermissionStatusRowView: NSView {
+    
+    private let onAction: () -> Void
+    private let hasNote: Bool
+    private var isGranted = false
+    
+    private let box = NSBox()
+    private let statusLabel = NSTextField(labelWithString: "○")
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let descriptionLabel = NSTextField(labelWithString: "")
+    private let noteLabel = NSTextField(labelWithString: "")
+    private let actionButton = NSButton()
+    
+    init(title: String, description: String, buttonTitle: String, note: String? = nil, onAction: @escaping () -> Void) {
+        self.onAction = onAction
+        self.hasNote = note != nil
+        super.init(frame: .zero)
+        
+        titleLabel.stringValue = title
+        descriptionLabel.stringValue = description
+        actionButton.title = buttonTitle
+        if let note {
+            noteLabel.stringValue = note
+            noteLabel.isHidden = false
+        }
+        
+        setupUI()
+        updateUI()
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    private func setupUI() {
+        box.boxType = .custom
+        box.cornerRadius = 10
+        box.borderWidth = 1
+        box.borderColor = .separatorColor
+        box.fillColor = .controlBackgroundColor
+        addSubview(box)
+        
+        statusLabel.font = .systemFont(ofSize: 18)
+        statusLabel.alignment = .center
+        statusLabel.textColor = .tertiaryLabelColor
+        box.addSubview(statusLabel)
+        
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        box.addSubview(titleLabel)
+        
+        descriptionLabel.font = .systemFont(ofSize: 11)
+        descriptionLabel.textColor = .secondaryLabelColor
+        box.addSubview(descriptionLabel)
+        
+        noteLabel.font = .systemFont(ofSize: 10)
+        noteLabel.textColor = .tertiaryLabelColor
+        noteLabel.isHidden = true
+        box.addSubview(noteLabel)
+        
+        actionButton.bezelStyle = .rounded
+        actionButton.controlSize = .regular
+        actionButton.target = self
+        actionButton.action = #selector(didTapAction)
+        box.addSubview(actionButton)
+    }
+    
+    func setGranted(_ granted: Bool) {
+        guard granted != isGranted else { return }
+        isGranted = granted
+        updateUI()
+    }
+    
+    private func updateUI() {
+        if isGranted {
+            statusLabel.stringValue = "✓"
+            statusLabel.textColor = .systemGreen
+            box.borderColor = .systemGreen.withAlphaComponent(0.5)
+            box.fillColor = .systemGreen.withAlphaComponent(0.05)
+            actionButton.isHidden = true
+        } else {
+            statusLabel.stringValue = "○"
+            statusLabel.textColor = .tertiaryLabelColor
+            box.borderColor = .separatorColor
+            box.fillColor = .controlBackgroundColor
+            actionButton.isHidden = false
+        }
+    }
+    
+    override func layout() {
+        super.layout()
+        box.frame = bounds
+        
+        let padding: CGFloat = 16
+        let statusSize: CGFloat = 24
+        let buttonWidth: CGFloat = 112
+        
+        statusLabel.frame = NSRect(x: padding, y: (bounds.height - statusSize) / 2, width: statusSize, height: statusSize)
+        actionButton.frame = NSRect(x: bounds.width - padding - buttonWidth, y: (bounds.height - 28) / 2, width: buttonWidth, height: 28)
+        
+        let labelX = padding + statusSize + 12
+        let labelWidth = bounds.width - labelX - buttonWidth - padding - 16
+        
+        if hasNote {
+            titleLabel.frame = NSRect(x: labelX, y: bounds.height / 2 + 8, width: labelWidth, height: 18)
+            descriptionLabel.frame = NSRect(x: labelX, y: bounds.height / 2 - 8, width: labelWidth, height: 14)
+            noteLabel.frame = NSRect(x: labelX, y: bounds.height / 2 - 22, width: labelWidth, height: 14)
+        } else {
+            titleLabel.frame = NSRect(x: labelX, y: bounds.height / 2 + 2, width: labelWidth, height: 18)
+            descriptionLabel.frame = NSRect(x: labelX, y: bounds.height / 2 - 16, width: labelWidth, height: 16)
+        }
+    }
+    
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: hasNote ? 72 : 64)
+    }
+    
+    @objc private func didTapAction() {
+        onAction()
     }
 }
 

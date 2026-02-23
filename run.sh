@@ -7,6 +7,23 @@ APP_NAME="Hearsay"
 BUNDLE_ID="com.swair.hearsay"
 APP_PATH="build/Build/Products/Debug/Hearsay.app"
 BINARY_SRC="$HOME/work/misc/qwen-asr/qwen_asr"
+RESET_PERMISSIONS=true
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-reset)
+            RESET_PERMISSIONS=false
+            ;;
+        --reset)
+            RESET_PERMISSIONS=true
+            ;;
+        *)
+            echo "Unknown flag: $arg"
+            echo "Usage: ./run.sh [--no-reset|--reset]"
+            exit 1
+            ;;
+    esac
+done
 
 # Colors
 RED='\033[0;31m'
@@ -54,26 +71,30 @@ else
     echo "Build it first: cd ~/work/misc/qwen-asr && make blas"
 fi
 
-# Reset permissions (clears stale entries from previous builds)
-echo -e "${YELLOW}Resetting permissions...${NC}"
-tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
-tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null || true
+if [ "$RESET_PERMISSIONS" = true ]; then
+    # Reset permissions (clears stale entries from previous builds)
+    echo -e "${YELLOW}Resetting permissions...${NC}"
+    tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
+    tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null || true
 
-# Check if we need to prompt for accessibility
-echo ""
-echo -e "${YELLOW}NOTE: After rebuild, you may need to re-grant Accessibility permission.${NC}"
-echo -e "If hotkey doesn't work:"
-echo -e "  1. Open System Settings → Privacy & Security → Accessibility"
-echo -e "  2. Click + and add: ${GREEN}$(pwd)/$APP_PATH${NC}"
-echo ""
+    # Check if we need to prompt for accessibility
+    echo ""
+    echo -e "${YELLOW}NOTE: After rebuild, you may need to re-grant Accessibility permission.${NC}"
+    echo -e "If hotkey doesn't work:"
+    echo -e "  1. Open System Settings → Privacy & Security → Accessibility"
+    echo -e "  2. Click + and add: ${GREEN}$(pwd)/$APP_PATH${NC}"
+    echo ""
 
-# Ask user if they want to open settings
-read -p "Open Accessibility Settings now? (y/N) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-    echo -e "${YELLOW}Add Hearsay.app, then press Enter to launch...${NC}"
-    read
+    # Ask user if they want to open settings
+    read -p "Open Accessibility Settings now? (y/N) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        echo -e "${YELLOW}Add Hearsay.app, then press Enter to launch...${NC}"
+        read
+    fi
+else
+    echo -e "${GREEN}Skipping permission reset (--no-reset).${NC}"
 fi
 
 # Launch

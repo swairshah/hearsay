@@ -92,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showSettings()
         }
         
+        statusBar.onShowPermissions = { [weak self] in
+            self?.showPermissions()
+        }
+        
         statusBar.onCopyHistoryItem = { item in
             TextInserter.copyToClipboard(item.text)
             // Optionally also paste
@@ -370,9 +374,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     logger.info("Audio split into \(segments.count) segments")
                     var transcripts: [String] = []
                     
-                    for segment in segments {
-                        let segmentText = try await transcriber.transcribe(audioURL: segment)
-                        transcripts.append(segmentText)
+                    for (index, segment) in segments.enumerated() {
+                        do {
+                            let segmentText = try await transcriber.transcribe(audioURL: segment)
+                            transcripts.append(segmentText)
+                        } catch Transcriber.TranscriptionError.noOutput {
+                            // Short/silent segment is expected sometimes when splitting at screenshot boundaries.
+                            // Keep placeholder so figure interleaving alignment remains correct.
+                            logger.info("Segment \(index) produced no transcription output; continuing")
+                            transcripts.append("")
+                        }
                     }
                     
                     // Clean up segment files
@@ -520,22 +531,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         historyWindowController?.showWindow()
     }
     
-    private func showSettings() {
-        if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController()
-            settingsWindowController?.onHotkeyChanged = { [weak self] in
-                // Reload hotkey settings
-                self?.hotkeyMonitor.loadSettings()
-            }
-            settingsWindowController?.onWindowOpened = { [weak self] in
-                // Stop hotkey monitor while settings is open to allow shortcut recording
-                self?.hotkeyMonitor.stop()
-            }
-            settingsWindowController?.onWindowClosed = { [weak self] in
-                // Restart hotkey monitor when settings closes
-                self?.tryStartHotkeyMonitor()
-            }
+    private func ensureSettingsWindowController() -> SettingsWindowController {
+        if let existing = settingsWindowController {
+            return existing
         }
-        settingsWindowController?.show()
+        
+        let controller = SettingsWindowController()
+        controller.onHotkeyChanged = { [weak self] in
+            // Reload hotkey settings
+            self?.hotkeyMonitor.loadSettings()
+        }
+        controller.onWindowOpened = { [weak self] in
+            // Stop hotkey monitor while settings is open to allow shortcut recording
+            self?.hotkeyMonitor.stop()
+        }
+        controller.onWindowClosed = { [weak self] in
+            // Restart hotkey monitor when settings closes
+            self?.tryStartHotkeyMonitor()
+        }
+        settingsWindowController = controller
+        return controller
+    }
+    
+    private func showSettings() {
+        ensureSettingsWindowController().show(tab: .settings)
+    }
+    
+    private func showPermissions() {
+        ensureSettingsWindowController().show(tab: .permissions)
     }
 }

@@ -35,6 +35,11 @@ enum Constants {
         return appSupport.appendingPathComponent("Hearsay/History", isDirectory: true)
     }
     
+    static var figuresDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Hearsay/Figures", isDirectory: true)
+    }
+    
     static var tempAudioURL: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("hearsay_recording.wav")
     }

@@ -54,9 +54,10 @@ else
     echo "Build it first: cd ~/work/misc/qwen-asr && make blas"
 fi
 
-# Reset accessibility permission (clears stale entries from previous builds)
-echo -e "${YELLOW}Resetting accessibility permissions...${NC}"
+# Reset permissions (clears stale entries from previous builds)
+echo -e "${YELLOW}Resetting permissions...${NC}"
 tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null || true
+tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null || true
 
 # Check if we need to prompt for accessibility
 echo ""

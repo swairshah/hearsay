@@ -24,6 +24,7 @@ final class RecordingWindow: NSPanel {
         hasShadow = true
         ignoresMouseEvents = true
         isMovableByWindowBackground = false
+        hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         
         // Start hidden
@@ -38,7 +39,10 @@ final class RecordingWindow: NSPanel {
     func positionOnScreen(width: CGFloat? = nil) {
         let mouseLocation = NSEvent.mouseLocation
         let targetScreen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
-        guard let screen = targetScreen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        guard let screen = targetScreen ?? NSScreen.main ?? NSScreen.screens.first else {
+            logger.error("positionOnScreen: No screen found!")
+            return
+        }
         
         let screenFrame = screen.visibleFrame
         let newWidth = width ?? frame.size.width
@@ -48,6 +52,7 @@ final class RecordingWindow: NSPanel {
         let y = screenFrame.minY + Constants.indicatorBottomMargin
         
         let newFrame = NSRect(x: x, y: y, width: newWidth, height: Constants.indicatorHeight)
+        logger.info("positionOnScreen: placing at x=\(Int(x)), y=\(Int(y)), screen=\(screen.localizedName), screenFrame=\(Int(screenFrame.minX)),\(Int(screenFrame.minY))-\(Int(screenFrame.maxX)),\(Int(screenFrame.maxY))")
         setFrame(newFrame, display: true, animate: alphaValue > 0)
     }
     
@@ -58,20 +63,30 @@ final class RecordingWindow: NSPanel {
         animationGeneration += 1
         let currentGeneration = animationGeneration
         
-        logger.debug("fadeIn called (generation \(currentGeneration))")
+        print("FADEIN called gen=\(currentGeneration) alpha=\(self.alphaValue) visible=\(self.isVisible)")
+        logger.info("fadeIn called (generation \(currentGeneration), current alpha: \(self.alphaValue), isVisible: \(self.isVisible))")
         
         positionOnScreen(width: Constants.indicatorWidth)
         
-        // Cancel any ongoing animations
-        animator().alphaValue = alphaValue
+        // Immediately snap alpha to a small value to ensure visibility
+        // Don't use animator() here - we want instant, not animated
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            self.alphaValue = max(self.alphaValue, 0.01)
+        }
         
         // Ensure window is visible and on top
         orderFrontRegardless()
+        
+        logger.info("fadeIn: after orderFront, alpha: \(self.alphaValue), isVisible: \(self.isVisible), level=\(self.level.rawValue), frame=\(Int(self.frame.origin.x)),\(Int(self.frame.origin.y))")
         
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Constants.indicatorFadeIn
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             self.animator().alphaValue = 1
+        } completionHandler: {
+            logger.info("fadeIn animation complete (generation \(currentGeneration)), alpha: \(self.alphaValue)")
         }
     }
     
@@ -79,7 +94,7 @@ final class RecordingWindow: NSPanel {
         // Capture current generation to check in completion handler
         let currentGeneration = animationGeneration
         
-        logger.debug("fadeOut called (generation \(currentGeneration))")
+        logger.info("fadeOut called (generation \(currentGeneration), current alpha: \(self.alphaValue), isVisible: \(self.isVisible))")
         
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Constants.indicatorFadeOut
@@ -90,10 +105,10 @@ final class RecordingWindow: NSPanel {
             
             // Only order out if no new fadeIn was called during animation
             if self.animationGeneration == currentGeneration {
-                logger.debug("fadeOut completing - ordering out (generation \(currentGeneration))")
+                logger.info("fadeOut completing - ordering out (generation \(currentGeneration))")
                 self.orderOut(nil)
             } else {
-                logger.debug("fadeOut cancelled - generation changed from \(currentGeneration) to \(self.animationGeneration)")
+                logger.info("fadeOut cancelled - generation changed from \(currentGeneration) to \(self.animationGeneration)")
             }
             completion?()
         })

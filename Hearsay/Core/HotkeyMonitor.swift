@@ -23,6 +23,7 @@ final class HotkeyMonitor {
     
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
+    var onScreenshotRequested: (() -> Void)?
     
     private(set) var state: State = .idle
     private var eventTap: CFMachPort?
@@ -35,6 +36,11 @@ final class HotkeyMonitor {
     private var hotKeyHandler: EventHandlerRef?
     private var toggleHotKeyRef: EventHotKeyRef?
     private let toggleHotKeyID: UInt32 = 1
+    
+    // Screenshot hotkey (Option+4)
+    private var screenshotHotKeyRef: EventHotKeyRef?
+    private let screenshotHotKeyID: UInt32 = 2
+    private let screenshotKeyCode: UInt32 = 21  // '4' key
     
     private let tapDisableWindow: TimeInterval = 10.0
     private let maxTapDisableEventsBeforeRestart = 3
@@ -99,14 +105,29 @@ final class HotkeyMonitor {
     }
     
     func stop() {
+        hotkeyLogger.info("HotkeyMonitor.stop() called")
         cancelTapRecovery()
-        holdPollingTimer?.invalidate()
-        holdPollingTimer = nil
+        if holdPollingTimer != nil {
+            hotkeyLogger.info("Invalidating polling timer")
+            holdPollingTimer?.invalidate()
+            holdPollingTimer = nil
+        }
         destroyEventTap()
         unregisterToggleHotKey()
+        unregisterScreenshotHotKey()
         holdModifierWasPressed = false
         rightOptionDownAlone = false
         state = .idle
+    }
+    
+    /// Enable screenshot hotkey (call when recording starts)
+    func enableScreenshotHotKey() {
+        registerScreenshotHotKey()
+    }
+    
+    /// Disable screenshot hotkey (call when recording stops)
+    func disableScreenshotHotKey() {
+        unregisterScreenshotHotKey()
     }
     
     // MARK: - Event Tap Lifecycle
@@ -188,18 +209,28 @@ final class HotkeyMonitor {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
     
+    private var pollCount: Int = 0
+    
     private func startHoldPolling() {
         if holdPollingTimer != nil { return }
         
         let initialFlags = CGEventSource.flagsState(.combinedSessionState)
         holdModifierWasPressed = isHoldKeyDownInSessionState(flags: initialFlags)
         
+        hotkeyLogger.info("Starting hold polling timer")
         holdPollingTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.pollHoldState()
         }
     }
     
     private func pollHoldState() {
+        pollCount += 1
+        // Log every 10 seconds (500 polls at 0.02s interval) to confirm polling is alive
+        if pollCount % 500 == 0 {
+            print("HEARTBEAT #\(pollCount) state=\(state)")
+            hotkeyLogger.info("Poll heartbeat #\(self.pollCount), state=\(String(describing: self.state))")
+        }
+        
         let flags = CGEventSource.flagsState(.combinedSessionState)
         let holdKeyDown = isHoldKeyDownInSessionState(flags: flags)
         let holdJustPressed = holdKeyDown && !holdModifierWasPressed
@@ -355,8 +386,12 @@ final class HotkeyMonitor {
                     &hotKeyID
                 )
                 
-                if result == noErr && hotKeyID.id == monitor.toggleHotKeyID {
-                    monitor.handleToggleHotKeyPressed()
+                if result == noErr {
+                    if hotKeyID.id == monitor.toggleHotKeyID {
+                        monitor.handleToggleHotKeyPressed()
+                    } else if hotKeyID.id == monitor.screenshotHotKeyID {
+                        monitor.handleScreenshotHotKeyPressed()
+                    }
                 }
                 return noErr
             },
@@ -399,6 +434,53 @@ final class HotkeyMonitor {
         if let ref = toggleHotKeyRef {
             UnregisterEventHotKey(ref)
             toggleHotKeyRef = nil
+        }
+    }
+    
+    // MARK: - Screenshot Hotkey (Option+4)
+    
+    private func registerScreenshotHotKey() {
+        unregisterScreenshotHotKey()
+        
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("HSY2"), id: screenshotHotKeyID)
+        
+        // Option modifier
+        let carbonModifiers = UInt32(optionKey)
+        
+        let status = RegisterEventHotKey(
+            screenshotKeyCode,
+            carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &screenshotHotKeyRef
+        )
+        
+        if status != noErr {
+            hotkeyLogger.error("Failed to register screenshot hotkey: status=\(status)")
+        } else {
+            hotkeyLogger.info("Registered screenshot hotkey: Option+4")
+        }
+    }
+    
+    private func unregisterScreenshotHotKey() {
+        if let ref = screenshotHotKeyRef {
+            UnregisterEventHotKey(ref)
+            screenshotHotKeyRef = nil
+            hotkeyLogger.info("Unregistered screenshot hotkey")
+        }
+    }
+    
+    private func handleScreenshotHotKeyPressed() {
+        // Only trigger if we're currently recording
+        guard state == .recordingHold || state == .recordingToggle else {
+            hotkeyLogger.info("Screenshot hotkey pressed but not recording - ignoring")
+            return
+        }
+        
+        hotkeyLogger.info("SCREENSHOT HOTKEY - triggering screenshot capture")
+        DispatchQueue.main.async { [weak self] in
+            self?.onScreenshotRequested?()
         }
     }
     

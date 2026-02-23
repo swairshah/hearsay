@@ -1,21 +1,22 @@
 import AppKit
 import Combine
 
-/// Onboarding window shown on first launch to download a model.
+/// Onboarding window shown on first launch for permissions and model download.
 final class OnboardingWindowController: NSWindowController {
     
-    private var contentView: OnboardingContentView!
+    private var permissionsView: PermissionsContentView!
+    private var modelDownloadView: OnboardingContentView!
     private var cancellables = Set<AnyCancellable>()
     var onComplete: (() -> Void)?
     
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Welcome to Hearsay"
+        window.title = "Set Up Hearsay"
         window.center()
         window.isReleasedWhenClosed = false
         
@@ -24,18 +25,334 @@ final class OnboardingWindowController: NSWindowController {
     }
     
     private func setupUI() {
-        contentView = OnboardingContentView(frame: window!.contentView!.bounds)
-        contentView.autoresizingMask = [.width, .height]
-        contentView.onComplete = { [weak self] in
+        // Start with permissions view
+        permissionsView = PermissionsContentView(frame: window!.contentView!.bounds)
+        permissionsView.autoresizingMask = [.width, .height]
+        permissionsView.onContinue = { [weak self] in
+            self?.showModelDownload()
+        }
+        window?.contentView = permissionsView
+    }
+    
+    private func showModelDownload() {
+        window?.title = "Download Model"
+        modelDownloadView = OnboardingContentView(frame: window!.contentView!.bounds)
+        modelDownloadView.autoresizingMask = [.width, .height]
+        modelDownloadView.onComplete = { [weak self] in
             self?.window?.close()
             self?.onComplete?()
         }
-        window?.contentView = contentView
+        
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            self.permissionsView.animator().alphaValue = 0
+        } completionHandler: {
+            self.window?.contentView = self.modelDownloadView
+            self.modelDownloadView.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                self.modelDownloadView.animator().alphaValue = 1
+            }
+        }
     }
     
     func show() {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+// MARK: - Permissions Content View
+
+private class PermissionsContentView: NSView {
+    
+    var onContinue: (() -> Void)?
+    
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let permissionsStack = NSStackView()
+    private let continueButton = NSButton()
+    
+    private var microphoneRow: PermissionRow!
+    private var accessibilityRow: PermissionRow!
+    private var screenRecordingRow: PermissionRow!
+    
+    private var permissionCheckTimer: Timer?
+    
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupUI()
+        startPermissionChecking()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    deinit {
+        permissionCheckTimer?.invalidate()
+    }
+    
+    private func setupUI() {
+        wantsLayer = true
+        
+        // Title
+        titleLabel.stringValue = "Set Up Hearsay"
+        titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+        
+        // Subtitle
+        subtitleLabel.stringValue = "Hearsay needs a few permissions to work properly."
+        subtitleLabel.font = .systemFont(ofSize: 13)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        addSubview(subtitleLabel)
+        
+        // Permission rows
+        microphoneRow = PermissionRow(
+            title: "Microphone",
+            description: "Records your voice for transcription",
+            buttonTitle: "Allow",
+            onAction: { [weak self] in
+                Task {
+                    await PermissionsManager.requestMicrophone()
+                    await MainActor.run {
+                        self?.updatePermissionStates()
+                    }
+                }
+            }
+        )
+        
+        accessibilityRow = PermissionRow(
+            title: "Accessibility",
+            description: "Handles hotkeys and pasting text",
+            buttonTitle: "Open Settings",
+            onAction: {
+                PermissionsManager.requestAccessibility()
+            }
+        )
+        
+        screenRecordingRow = PermissionRow(
+            title: "Screen Recording",
+            description: "Allows taking screenshots (for figures)",
+            buttonTitle: "Open Settings",
+            note: "May need to restart app after granting",
+            onAction: {
+                // First request access - this adds our app to the list in System Settings
+                PermissionsManager.requestScreenRecording()
+                // Then open settings so user can enable it
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    PermissionsManager.openScreenRecordingSettings()
+                }
+            }
+        )
+        
+        permissionsStack.orientation = .vertical
+        permissionsStack.spacing = 12
+        permissionsStack.addArrangedSubview(microphoneRow)
+        permissionsStack.addArrangedSubview(accessibilityRow)
+        permissionsStack.addArrangedSubview(screenRecordingRow)
+        addSubview(permissionsStack)
+        
+        // Continue button
+        continueButton.title = "Continue"
+        continueButton.bezelStyle = .rounded
+        continueButton.controlSize = .large
+        continueButton.target = self
+        continueButton.action = #selector(continueTapped)
+        addSubview(continueButton)
+        
+        updatePermissionStates()
+    }
+    
+    private func startPermissionChecking() {
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updatePermissionStates()
+        }
+    }
+    
+    private func updatePermissionStates() {
+        let micGranted = PermissionsManager.checkMicrophone() == .granted
+        let accessGranted = PermissionsManager.checkAccessibility() == .granted
+        let screenGranted = PermissionsManager.checkScreenRecording() == .granted
+        
+        microphoneRow.setGranted(micGranted)
+        accessibilityRow.setGranted(accessGranted)
+        screenRecordingRow.setGranted(screenGranted)
+        
+        // Enable continue if at least mic and accessibility are granted
+        // Screen recording is optional but recommended
+        let canContinue = micGranted && accessGranted
+        continueButton.isEnabled = canContinue
+        continueButton.alphaValue = canContinue ? 1.0 : 0.5
+    }
+    
+    @objc private func continueTapped() {
+        permissionCheckTimer?.invalidate()
+        onContinue?()
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        let centerX = bounds.midX
+        var y = bounds.height - 50
+        
+        // Title
+        titleLabel.sizeToFit()
+        titleLabel.frame = NSRect(x: 20, y: y - 30, width: bounds.width - 40, height: 30)
+        y -= 50
+        
+        // Subtitle
+        subtitleLabel.sizeToFit()
+        subtitleLabel.frame = NSRect(x: 20, y: y - 20, width: bounds.width - 40, height: 20)
+        y -= 50
+        
+        // Permissions stack
+        let stackWidth: CGFloat = bounds.width - 80
+        let stackHeight: CGFloat = 220
+        permissionsStack.frame = NSRect(x: centerX - stackWidth/2, y: y - stackHeight, width: stackWidth, height: stackHeight)
+        y -= stackHeight + 30
+        
+        // Continue button
+        continueButton.sizeToFit()
+        let buttonWidth = max(180, continueButton.frame.width + 40)
+        continueButton.frame = NSRect(x: centerX - buttonWidth/2, y: y - 32, width: buttonWidth, height: 32)
+    }
+}
+
+// MARK: - Permission Row
+
+private class PermissionRow: NSView {
+    
+    private let containerBox = NSBox()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let descLabel = NSTextField(labelWithString: "")
+    private let noteLabel = NSTextField(labelWithString: "")
+    private let actionButton = NSButton()
+    private let checkmark = NSTextField(labelWithString: "")
+    
+    private let onAction: () -> Void
+    private var isGranted = false
+    private let hasNote: Bool
+    
+    init(title: String, description: String, buttonTitle: String, note: String? = nil, onAction: @escaping () -> Void) {
+        self.onAction = onAction
+        self.hasNote = note != nil
+        super.init(frame: .zero)
+        
+        setupUI()
+        titleLabel.stringValue = title
+        descLabel.stringValue = description
+        actionButton.title = buttonTitle
+        if let note = note {
+            noteLabel.stringValue = note
+            noteLabel.isHidden = false
+        }
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    private func setupUI() {
+        containerBox.boxType = .custom
+        containerBox.cornerRadius = 10
+        containerBox.borderWidth = 1
+        containerBox.borderColor = .separatorColor
+        containerBox.fillColor = NSColor.controlBackgroundColor
+        addSubview(containerBox)
+        
+        // Checkmark circle (empty or filled)
+        checkmark.font = .systemFont(ofSize: 18)
+        checkmark.textColor = .tertiaryLabelColor
+        checkmark.alignment = .center
+        containerBox.addSubview(checkmark)
+        
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        containerBox.addSubview(titleLabel)
+        
+        descLabel.font = .systemFont(ofSize: 11)
+        descLabel.textColor = .secondaryLabelColor
+        containerBox.addSubview(descLabel)
+        
+        noteLabel.font = .systemFont(ofSize: 10)
+        noteLabel.textColor = .tertiaryLabelColor
+        noteLabel.isHidden = true
+        containerBox.addSubview(noteLabel)
+        
+        actionButton.bezelStyle = .rounded
+        actionButton.controlSize = .regular
+        actionButton.target = self
+        actionButton.action = #selector(buttonTapped)
+        containerBox.addSubview(actionButton)
+        
+        updateUI()
+    }
+    
+    func setGranted(_ granted: Bool) {
+        guard isGranted != granted else { return }
+        isGranted = granted
+        updateUI()
+    }
+    
+    private func updateUI() {
+        if isGranted {
+            checkmark.stringValue = "✓"
+            checkmark.textColor = .systemGreen
+            containerBox.borderColor = .systemGreen.withAlphaComponent(0.5)
+            containerBox.fillColor = NSColor.systemGreen.withAlphaComponent(0.05)
+            actionButton.isHidden = true
+        } else {
+            checkmark.stringValue = "○"
+            checkmark.textColor = .tertiaryLabelColor
+            containerBox.borderColor = .separatorColor
+            containerBox.fillColor = NSColor.controlBackgroundColor
+            actionButton.isHidden = false
+        }
+    }
+    
+    @objc private func buttonTapped() {
+        onAction()
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        containerBox.frame = bounds
+        
+        let padding: CGFloat = 16
+        let checkSize: CGFloat = 24
+        let buttonWidth: CGFloat = 110
+        
+        // Checkmark on left
+        checkmark.frame = NSRect(x: padding, y: (bounds.height - checkSize) / 2, width: checkSize, height: checkSize)
+        
+        // Button on right
+        actionButton.frame = NSRect(
+            x: bounds.width - padding - buttonWidth,
+            y: (bounds.height - 28) / 2,
+            width: buttonWidth,
+            height: 28
+        )
+        
+        // Labels in the middle
+        let labelX = padding + checkSize + 12
+        let labelWidth = bounds.width - labelX - buttonWidth - padding - 16
+        
+        if hasNote {
+            titleLabel.frame = NSRect(x: labelX, y: bounds.height / 2 + 8, width: labelWidth, height: 18)
+            descLabel.frame = NSRect(x: labelX, y: bounds.height / 2 - 8, width: labelWidth, height: 14)
+            noteLabel.frame = NSRect(x: labelX, y: bounds.height / 2 - 22, width: labelWidth, height: 14)
+        } else {
+            titleLabel.frame = NSRect(x: labelX, y: bounds.height / 2 + 2, width: labelWidth, height: 18)
+            descLabel.frame = NSRect(x: labelX, y: bounds.height / 2 - 16, width: labelWidth, height: 16)
+        }
+    }
+    
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: hasNote ? 72 : 64)
     }
 }
 

@@ -5,6 +5,8 @@ import Carbon.HIToolbox
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     
     var onHotkeyChanged: (() -> Void)?
+    var onWindowOpened: (() -> Void)?
+    var onWindowClosed: (() -> Void)?
     
     private let tabView = NSTabView()
     private var settingsTab: SettingsTabView!
@@ -54,6 +56,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         historyTab.refresh()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onWindowOpened?()
+    }
+    
+    func windowWillClose(_ notification: Notification) {
+        onWindowClosed?()
     }
 }
 

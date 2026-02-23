@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRecording = false
     private var currentModelPath: String?
     private var indicatorDismissWorkItem: DispatchWorkItem?
+    private var currentDismissID: UUID?
+    private var currentTranscriptionID: UUID?
     
     // MARK: - Lifecycle
     
@@ -41,12 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupAudioRecorder()
         setupHotkeyMonitor()
         
-        // Check permissions and model (slight delay helps with launch via Finder)
+        // Check if we need to show onboarding (permissions or model missing)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            Task {
-                await self.checkPermissions()
-                await self.setupModel()
-            }
+            self.checkAndShowOnboardingIfNeeded()
         }
     }
     
@@ -67,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fm = FileManager.default
         try? fm.createDirectory(at: Constants.modelsDirectory, withIntermediateDirectories: true)
         try? fm.createDirectory(at: Constants.historyDirectory, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: Constants.figuresDirectory, withIntermediateDirectories: true)
     }
     
     private func setupStatusBar() {
@@ -136,151 +136,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.onRecordingStop = { [weak self] in
             self?.stopRecording()
         }
+        
+        hotkeyMonitor.onScreenshotRequested = { [weak self] in
+            self?.captureScreenshot()
+        }
+        
+        // Set up screenshot manager callback
+        ScreenshotManager.shared.onScreenshotCaptured = { [weak self] count in
+            guard let self = self else { return }
+            logger.info("Screenshot captured: count=\(count)")
+            self.recordingIndicator.figureCount = count
+            // Resize window to fit new indicator width
+            self.recordingWindow.positionOnScreen(width: self.recordingIndicator.idealWidth)
+        }
     }
     
-    // MARK: - Permissions
+    // MARK: - Permissions & Onboarding
     
     private var permissionCheckTimer: Timer?
-    
-    private func checkPermissions() async {
-        // Check microphone - request if not determined
-        let micStatus = PermissionsManager.checkMicrophone()
-        if micStatus == .notDetermined {
-            _ = await PermissionsManager.requestMicrophone()
-        }
-        
-        // Prompt for Accessibility explicitly when not trusted.
-        if PermissionsManager.checkAccessibility() != .granted {
-            await MainActor.run {
-                PermissionsManager.requestAccessibility()
-            }
-        }
-        
-        // Try to start hotkey monitor
-        await MainActor.run {
-            tryStartHotkeyMonitor()
-        }
-    }
-    
     private var permissionRetryCount = 0
     
-    private func tryStartHotkeyMonitor() {
-        if !hotkeyMonitor.start() {
-            permissionRetryCount += 1
-            
-            if permissionRetryCount == 1 {
-                logger.warning("Hotkey monitor failed to start, retrying...")
-            }
-            
-            if permissionRetryCount == 5 {
-                DispatchQueue.main.async {
-                    self.showAccessibilityHelp()
-                }
-            }
-            
-            if permissionCheckTimer == nil {
-                permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                    self?.tryStartHotkeyMonitor()
-                }
-            }
-            return
-        }
+    /// Check if we need to show onboarding (missing permissions or model)
+    private func checkAndShowOnboardingIfNeeded() {
+        let micGranted = PermissionsManager.checkMicrophone() == .granted
+        let accessGranted = PermissionsManager.checkAccessibility() == .granted
+        let hasModel = !ModelDownloader.shared.installedModels().isEmpty || 
+                       FileManager.default.fileExists(atPath: "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b")
         
-        let hasAccessibility = PermissionsManager.checkAccessibility() == .granted
-        if !hasAccessibility {
-            permissionRetryCount += 1
-            
-            if permissionRetryCount == 1 {
-                logger.info("Accessibility permission missing - toggle hotkey active, requesting permission for hold hotkey")
-                NSApp.activate(ignoringOtherApps: true)
-                PermissionsManager.requestAccessibility()
-            }
-            
-            if permissionRetryCount == 5 {
-                DispatchQueue.main.async {
-                    self.showAccessibilityHelp()
-                }
-            }
-            
-            if permissionCheckTimer == nil {
-                permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                    self?.tryStartHotkeyMonitor()
-                }
-            }
-            return
-        }
-        
-        logger.info("Hotkey monitor started successfully")
-        permissionCheckTimer?.invalidate()
-        permissionCheckTimer = nil
-        permissionRetryCount = 0
-    }
-    
-    private func showAccessibilityHelp() {
-        NSApp.activate(ignoringOtherApps: true)
-        
-        let alert = NSAlert()
-        alert.messageText = "Accessibility Permission Needed"
-        alert.informativeText = """
-        Hearsay needs accessibility permission to detect the Option key.
-        
-        Please:
-        1. Open System Settings → Privacy & Security → Accessibility
-        2. Find "Hearsay" and toggle it OFF then ON
-        
-        (This is needed after app updates)
-        """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Open Settings")
-        alert.addButton(withTitle: "OK")
-        
-        if alert.runModal() == .alertFirstButtonReturn {
-            PermissionsManager.openAccessibilitySettings()
+        if !micGranted || !accessGranted || !hasModel {
+            // Show onboarding for permissions and/or model download
+            showOnboardingForSetup()
+        } else {
+            // All good, just set up the model and start
+            setupModelAndStart()
         }
     }
     
-    // MARK: - Model Setup
-    
-    private func setupModel() async {
-        await MainActor.run {
-            // Check for installed models using ModelDownloader
-            let installedModels = ModelDownloader.shared.installedModels()
-            
-            if let firstModel = installedModels.first {
-                let modelPath = Constants.modelsDirectory.appendingPathComponent(firstModel.rawValue).path
-                currentModelPath = modelPath
-                transcriber = Transcriber(modelPath: modelPath)
-                statusBar.updateModelName(firstModel.displayName)
-                logger.info("Using model: \(firstModel.rawValue)")
-            } else {
-                // Check for development model as fallback
-                let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
-                if FileManager.default.fileExists(atPath: devModelPath) {
-                    currentModelPath = devModelPath
-                    transcriber = Transcriber(modelPath: devModelPath)
-                    statusBar.updateModelName("qwen3-asr-0.6b (dev)")
-                    logger.info("Using development model")
-                } else {
-                    // No model - show onboarding
-                    statusBar.updateModelName(nil)
-                    logger.info("No model found, showing onboarding")
-                    showOnboardingForDownload()
-                }
-            }
-        }
-    }
-    
-    private func showOnboardingForDownload() {
+    private func showOnboardingForSetup() {
         if onboardingWindowController == nil {
             onboardingWindowController = OnboardingWindowController()
             onboardingWindowController?.onComplete = { [weak self] in
-                // Model downloaded, set it up
-                Task {
-                    await self?.setupModel()
-                }
+                self?.setupModelAndStart()
             }
         }
         onboardingWindowController?.show()
+    }
+    
+    private func setupModelAndStart() {
+        // Set up model
+        let installedModels = ModelDownloader.shared.installedModels()
+        
+        if let firstModel = installedModels.first {
+            let modelPath = Constants.modelsDirectory.appendingPathComponent(firstModel.rawValue).path
+            currentModelPath = modelPath
+            transcriber = Transcriber(modelPath: modelPath)
+            statusBar.updateModelName(firstModel.displayName)
+            logger.info("Using model: \(firstModel.rawValue)")
+        } else {
+            // Check for development model as fallback
+            let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
+            if FileManager.default.fileExists(atPath: devModelPath) {
+                currentModelPath = devModelPath
+                transcriber = Transcriber(modelPath: devModelPath)
+                statusBar.updateModelName("qwen3-asr-0.6b (dev)")
+                logger.info("Using development model")
+            }
+        }
+        
+        // Start hotkey monitor
+        tryStartHotkeyMonitor()
+    }
+    
+    private func tryStartHotkeyMonitor() {
+        if hotkeyMonitor.start() {
+            logger.info("Hotkey monitor started successfully")
+            self.permissionCheckTimer?.invalidate()
+            self.permissionCheckTimer = nil
+            self.permissionRetryCount = 0
+        } else {
+            self.permissionRetryCount += 1
+            logger.warning("Hotkey monitor failed to start (attempt \(self.permissionRetryCount))")
+            
+            // Retry periodically
+            if self.permissionCheckTimer == nil {
+                self.permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                    self?.tryStartHotkeyMonitor()
+                }
+            }
+        }
     }
     
     // MARK: - Recording
@@ -296,21 +239,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
+        // Check microphone permission before recording
+        let micStatus = PermissionsManager.checkMicrophone()
+        guard micStatus == .granted else {
+            logger.error("Microphone permission not granted: \(String(describing: micStatus))")
+            showError("No mic access")
+            showOnboardingForSetup()
+            return
+        }
+        
         isRecording = true
-        logger.info("Starting recording...")
+        logger.info("=== START RECORDING ===")
         
         // Cancel any pending dismiss from previous transcription/error
+        logger.info("Canceling pending dismiss, currentDismissID was: \(self.currentDismissID?.uuidString ?? "nil")")
         cancelPendingIndicatorDismiss()
         
-        // Update UI
+        // Invalidate UI updates from in-flight transcription tasks.
+        logger.info("Invalidating transcription ID, was: \(self.currentTranscriptionID?.uuidString ?? "nil")")
+        currentTranscriptionID = nil
+        
+        // Start screenshot session
+        ScreenshotManager.shared.startSession()
+        hotkeyMonitor.enableScreenshotHotKey()
+        
+        // Update UI - always show figure count indicator (works in both hold and toggle mode)
+        let isToggleMode = hotkeyMonitor.state == .recordingToggle
+        recordingIndicator.figureCount = 0
+        recordingIndicator.showFigureCount = true  // Always show, screenshots work in both modes
+        
+        logger.info("Setting indicator state to .recording and calling fadeIn")
         recordingIndicator.setState(.recording)
+        recordingWindow.positionOnScreen(width: recordingIndicator.idealWidth)
         recordingWindow.fadeIn()
         statusBar.showRecordingState(true)
         
         // Start recording
         audioRecorder.start()
         
-        logger.info("Recording started")
+        logger.info("Recording started (toggle mode: \(isToggleMode))")
+    }
+    
+    private func captureScreenshot() {
+        guard isRecording else {
+            logger.warning("Not recording, ignoring screenshot request")
+            return
+        }
+        
+        logger.info("Capturing screenshot...")
+        ScreenshotManager.shared.captureScreenshot()
     }
     
     private func stopRecording() {
@@ -319,9 +296,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return 
         }
         
-        logger.info("Stopping recording...")
+        logger.info("=== STOP RECORDING ===")
         isRecording = false
         statusBar.showRecordingState(false)
+        
+        // End screenshot session and disable hotkey
+        let figures = ScreenshotManager.shared.endSession()
+        hotkeyMonitor.disableScreenshotHotKey()
+        recordingIndicator.showFigureCount = false
+        
+        logger.info("Recording stopped with \(figures.count) screenshot(s)")
         
         // Stop recording and get audio file
         guard let audioURL = audioRecorder.stop() else {
@@ -340,21 +324,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Show transcribing state
+        logger.info("Setting indicator state to .transcribing")
         recordingIndicator.setState(.transcribing)
+        let transcriptionID = UUID()
+        currentTranscriptionID = transcriptionID
         
-        logger.info("Starting transcription...")
+        logger.info("Starting transcription with ID: \(transcriptionID.uuidString)")
         
         // Transcribe
         Task {
-            await transcribe(audioURL: audioURL)
+            await transcribe(audioURL: audioURL, transcriptionID: transcriptionID, figures: figures)
         }
     }
     
-    private func transcribe(audioURL: URL) async {
+    private func transcribe(audioURL: URL, transcriptionID: UUID, figures: [CapturedFigure] = []) async {
         guard let transcriber = transcriber else {
-            DispatchQueue.main.async { [weak self] in
-                self?.recordingIndicator.setState(.error("No model"))
-                self?.dismissIndicatorAfterDelay()
+            await MainActor.run {
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): no model, checking if stale...")
+                guard self.currentTranscriptionID == transcriptionID else {
+                    logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
+                    return
+                }
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing error and scheduling dismiss")
+                self.recordingIndicator.setState(.error("No model"))
+                self.dismissIndicatorAfterDelay()
             }
             return
         }
@@ -363,28 +356,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let audioDuration = getAudioDuration(url: audioURL)
         
         do {
-            let text = try await transcriber.transcribe(audioURL: audioURL)
+            let text: String
             
-            DispatchQueue.main.async { [weak self] in
-                // Show success
-                self?.recordingIndicator.setState(.done)
+            if figures.isEmpty {
+                // Simple case: no figures, just transcribe
+                text = try await transcriber.transcribe(audioURL: audioURL)
+            } else {
+                // Interleaved case: split audio at figure timestamps and transcribe each segment
+                let timestamps = ScreenshotManager.shared.getSplitTimestamps(figures: figures)
+                logger.info("Splitting audio at timestamps: \(timestamps)")
+                
+                if let segments = AudioSplitter.splitWAV(at: audioURL, timestamps: timestamps) {
+                    logger.info("Audio split into \(segments.count) segments")
+                    var transcripts: [String] = []
+                    
+                    for segment in segments {
+                        let segmentText = try await transcriber.transcribe(audioURL: segment)
+                        transcripts.append(segmentText)
+                    }
+                    
+                    // Clean up segment files
+                    AudioSplitter.cleanupSegments(segments)
+                    
+                    // Format with interleaved figure references
+                    text = ScreenshotManager.shared.formatInterleavedTranscription(transcripts, figures: figures)
+                } else {
+                    // Fallback: couldn't split, transcribe whole file
+                    logger.warning("Failed to split audio, transcribing whole file")
+                    let rawText = try await transcriber.transcribe(audioURL: audioURL)
+                    // Simple format with figures at end
+                    let figurePaths = figures.enumerated().map { "Figure \($0.offset + 1): \($0.element.url.path)" }.joined(separator: "\n")
+                    text = rawText + (figures.isEmpty ? "" : "\n\n\(figurePaths)")
+                }
+            }
+            
+            await MainActor.run {
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
                 
                 // Insert text
                 TextInserter.insert(text)
                 
-                // Save to history
+                // Save to history (save raw text for cleaner history)
                 HistoryStore.shared.add(text: text, durationSeconds: audioDuration)
                 
+                guard self.currentTranscriptionID == transcriptionID else {
+                    logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
+                    return
+                }
+                
+                // Show success
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing done and scheduling dismiss")
+                self.recordingIndicator.setState(.done)
+                
                 // Dismiss after delay
-                self?.dismissIndicatorAfterDelay()
+                self.dismissIndicatorAfterDelay()
             }
             
             logger.info("Transcription complete: \(text.prefix(50))...")
             
         } catch {
-            DispatchQueue.main.async { [weak self] in
-                self?.recordingIndicator.setState(.error("Failed"))
-                self?.dismissIndicatorAfterDelay()
+            await MainActor.run {
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): ERROR, checking if stale...")
+                guard self.currentTranscriptionID == transcriptionID else {
+                    logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
+                    return
+                }
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing error and scheduling dismiss")
+                self.recordingIndicator.setState(.error("Failed"))
+                self.dismissIndicatorAfterDelay()
             }
             logger.error("Transcription error: \(error.localizedDescription)")
         }
@@ -407,22 +446,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func cancelPendingIndicatorDismiss() {
         indicatorDismissWorkItem?.cancel()
         indicatorDismissWorkItem = nil
+        currentDismissID = nil  // Invalidate any in-flight dismiss
     }
     
     private func scheduleIndicatorDismiss(after delay: TimeInterval) {
         cancelPendingIndicatorDismiss()
         
+        // Capture the current work item ID to detect if it was cancelled
+        let dismissID = UUID()
+        currentDismissID = dismissID
+        
+        logger.info("Scheduling dismiss \(dismissID.uuidString.prefix(8)) after \(delay)s")
+        
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             
+            logger.info("Dismiss \(dismissID.uuidString.prefix(8)) firing...")
+            
+            // Check if this dismiss was cancelled (a new recording started)
+            guard self.currentDismissID == dismissID else {
+                logger.info("Dismiss \(dismissID.uuidString.prefix(8)) cancelled (current: \(self.currentDismissID?.uuidString ?? "nil"))")
+                return
+            }
+            
             // Never hide while actively recording
             if self.isRecording {
-                logger.debug("Skipping indicator dismiss because recording is active")
+                logger.info("Dismiss \(dismissID.uuidString.prefix(8)) skipped - recording is active")
+                return
+            }
+            
+            // Final check: only dismiss if we're in a done/error state
+            // This prevents dismissing if a new recording started between scheduling and execution
+            switch self.recordingIndicator.state {
+            case .done, .error:
+                logger.info("Dismiss \(dismissID.uuidString.prefix(8)) proceeding - state is final, calling fadeOut")
+                break
+            case .recording, .transcribing:
+                logger.info("Dismiss \(dismissID.uuidString.prefix(8)) skipped - state is not final")
                 return
             }
             
             self.recordingWindow.fadeOut()
             self.indicatorDismissWorkItem = nil
+            self.currentDismissID = nil
         }
         
         indicatorDismissWorkItem = workItem
@@ -444,7 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Windows
     
     private func showOnboarding() {
-        showOnboardingForDownload()
+        showOnboardingForSetup()
     }
     
     private func showHistory() {
@@ -460,6 +526,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController?.onHotkeyChanged = { [weak self] in
                 // Reload hotkey settings
                 self?.hotkeyMonitor.loadSettings()
+            }
+            settingsWindowController?.onWindowOpened = { [weak self] in
+                // Stop hotkey monitor while settings is open to allow shortcut recording
+                self?.hotkeyMonitor.stop()
+            }
+            settingsWindowController?.onWindowClosed = { [weak self] in
+                // Restart hotkey monitor when settings closes
+                self?.tryStartHotkeyMonitor()
             }
         }
         settingsWindowController?.show()

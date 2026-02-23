@@ -57,11 +57,13 @@ final class StatusBarController {
     
     private func setupMenu() {
         menu = NSMenu()
+        menu.autoenablesItems = false  // Disable auto-validation for status bar menu
         
         // Toggle enabled
         toggleItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled(_:)), keyEquivalent: "")
         toggleItem.target = self
         toggleItem.state = .on
+        toggleItem.isEnabled = true
         menu.addItem(toggleItem)
         
         menu.addItem(.separator())
@@ -74,6 +76,7 @@ final class StatusBarController {
         // Download/Manage models
         let modelsMenuItem = NSMenuItem(title: "Manage Models...", action: #selector(showOnboarding(_:)), keyEquivalent: "")
         modelsMenuItem.target = self
+        modelsMenuItem.isEnabled = true
         menu.addItem(modelsMenuItem)
         
         menu.addItem(.separator())
@@ -87,11 +90,13 @@ final class StatusBarController {
         // View all history
         let allHistoryItem = NSMenuItem(title: "View All History...", action: #selector(showHistory(_:)), keyEquivalent: "h")
         allHistoryItem.target = self
+        allHistoryItem.isEnabled = true
         menu.addItem(allHistoryItem)
         
         // Clear history
         let clearHistoryItem = NSMenuItem(title: "Clear History", action: #selector(clearHistory(_:)), keyEquivalent: "")
         clearHistoryItem.target = self
+        clearHistoryItem.isEnabled = true
         menu.addItem(clearHistoryItem)
         
         menu.addItem(.separator())
@@ -99,11 +104,13 @@ final class StatusBarController {
         // Settings
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings(_:)), keyEquivalent: ",")
         settingsItem.target = self
+        settingsItem.isEnabled = true
         menu.addItem(settingsItem)
         
         // Help
         let helpItem = NSMenuItem(title: "How to Use", action: #selector(showHelp(_:)), keyEquivalent: "")
         helpItem.target = self
+        helpItem.isEnabled = true
         menu.addItem(helpItem)
         
         menu.addItem(.separator())
@@ -111,6 +118,7 @@ final class StatusBarController {
         // Quit
         let quitItem = NSMenuItem(title: "Quit Hearsay", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
+        quitItem.isEnabled = true
         menu.addItem(quitItem)
         
         statusItem.menu = menu

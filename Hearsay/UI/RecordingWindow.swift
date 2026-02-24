@@ -3,6 +3,25 @@ import os.log
 
 private let logger = Logger(subsystem: "com.swair.hearsay", category: "window")
 
+// File logger for debugging - writes to ~/Library/Application Support/Hearsay/debug.log
+private func fileLog(_ message: String) {
+    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    let logURL = appSupport.appendingPathComponent("Hearsay/debug.log")
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let entry = "[\(timestamp)] [RecordingWindow] \(message)\n"
+    if let data = entry.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: logURL.path) {
+            if let handle = try? FileHandle(forWritingTo: logURL) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            }
+        } else {
+            try? data.write(to: logURL)
+        }
+    }
+}
+
 /// Floating borderless window that displays the recording indicator.
 /// Appears near the bottom center of the active screen.
 final class RecordingWindow: NSPanel {
@@ -66,6 +85,10 @@ final class RecordingWindow: NSPanel {
         print("FADEIN called gen=\(currentGeneration) alpha=\(self.alphaValue) visible=\(self.isVisible)")
         logger.info("fadeIn called (generation \(currentGeneration), current alpha: \(self.alphaValue), isVisible: \(self.isVisible))")
         
+        // Detailed logging for debugging pill visibility issues
+        let screenInfo = NSScreen.screens.enumerated().map { "screen\($0.offset):\($0.element.frame)" }.joined(separator: ", ")
+        fileLog("fadeIn gen=\(currentGeneration) alpha=\(self.alphaValue) frame=\(self.frame) level=\(self.level.rawValue) screens=[\(screenInfo)]")
+        
         positionOnScreen(width: Constants.indicatorWidth)
         
         // Immediately snap alpha to a small value to ensure visibility
@@ -80,6 +103,7 @@ final class RecordingWindow: NSPanel {
         orderFrontRegardless()
         
         logger.info("fadeIn: after orderFront, alpha: \(self.alphaValue), isVisible: \(self.isVisible), level=\(self.level.rawValue), frame=\(Int(self.frame.origin.x)),\(Int(self.frame.origin.y))")
+        fileLog("fadeIn after orderFront: frame=\(self.frame) visible=\(self.isVisible) onScreen=\(self.screen?.localizedName ?? "nil")")
         
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Constants.indicatorFadeIn
@@ -95,6 +119,7 @@ final class RecordingWindow: NSPanel {
         let currentGeneration = animationGeneration
         
         logger.info("fadeOut called (generation \(currentGeneration), current alpha: \(self.alphaValue), isVisible: \(self.isVisible))")
+        fileLog("fadeOut called gen=\(currentGeneration) alpha=\(self.alphaValue)")
         
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Constants.indicatorFadeOut

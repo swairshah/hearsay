@@ -81,7 +81,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        onWindowOpened?()
+        
+        // Only pause hotkeys when opening the Settings tab (shortcut recorder needs key capture).
+        if tab == .settings {
+            onWindowOpened?()
+        }
     }
     
     func windowWillClose(_ notification: Notification) {

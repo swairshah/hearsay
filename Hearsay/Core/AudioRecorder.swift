@@ -20,11 +20,14 @@ final class AudioRecorder {
     private var audioFile: AVAudioFile?
     private var levelTimer: Timer?
     private var currentLevel: Float = 0
+    private var peakLevel: Float = 0
+    private var totalSamples: Int = 0
+    private var nonZeroSamples: Int = 0
     
     init() {}
     
     deinit {
-        stop()
+        _ = stop()
     }
     
     // MARK: - Public
@@ -34,6 +37,11 @@ final class AudioRecorder {
             print("AudioRecorder: Not idle, state = \(state)")
             return 
         }
+        
+        // Reset audio tracking
+        peakLevel = 0
+        totalSamples = 0
+        nonZeroSamples = 0
         
         do {
             print("AudioRecorder: Setting up audio session...")
@@ -54,8 +62,17 @@ final class AudioRecorder {
         }
     }
     
-    func stop() -> URL? {
-        guard case .recording = state else { return nil }
+    /// Result of stopping recording
+    struct StopResult {
+        let url: URL?
+        let wasSilent: Bool
+        let peakLevel: Float
+    }
+    
+    func stop() -> StopResult {
+        guard case .recording = state else { 
+            return StopResult(url: nil, wasSilent: true, peakLevel: 0) 
+        }
         
         levelTimer?.invalidate()
         levelTimer = nil
@@ -67,9 +84,14 @@ final class AudioRecorder {
         let url = audioFile?.url
         audioFile = nil
         
+        // Check if audio was essentially silent
+        // Peak level below -60dB (0.001) is considered silence
+        let silenceThreshold: Float = 0.001
+        let wasSilent = peakLevel < silenceThreshold
+        
         state = .idle
-        print("AudioRecorder: Stopped recording -> \(url?.path ?? "nil")")
-        return url
+        print("AudioRecorder: Stopped recording -> \(url?.path ?? "nil"), peak=\(peakLevel), silent=\(wasSilent)")
+        return StopResult(url: url, wasSilent: wasSilent, peakLevel: peakLevel)
     }
     
     // MARK: - Setup
@@ -160,6 +182,18 @@ final class AudioRecorder {
         // Calculate RMS
         var rms: Float = 0
         vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameLength))
+        
+        // Track peak level and non-zero samples for silence detection
+        peakLevel = max(peakLevel, rms)
+        totalSamples += frameLength
+        
+        // Count samples above noise floor (very low threshold)
+        let noiseFloor: Float = 0.0001
+        for i in 0..<frameLength {
+            if abs(channelData[i]) > noiseFloor {
+                nonZeroSamples += 1
+            }
+        }
         
         // Convert to dB and normalize to 0-1 range
         let minDb: Float = -60

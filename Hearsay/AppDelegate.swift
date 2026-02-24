@@ -3,6 +3,47 @@ import os.log
 
 private let logger = Logger(subsystem: "com.swair.hearsay", category: "app")
 
+// MARK: - File Logger for debugging intermittent issues
+private let fileLogger = FileLogger()
+
+final class FileLogger {
+    private let logURL: URL
+    private let queue = DispatchQueue(label: "com.swair.hearsay.filelogger")
+    
+    init() {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let hearsayDir = appSupport.appendingPathComponent("Hearsay")
+        try? FileManager.default.createDirectory(at: hearsayDir, withIntermediateDirectories: true)
+        logURL = hearsayDir.appendingPathComponent("debug.log")
+        
+        // Truncate if over 1MB
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+           let size = attrs[.size] as? Int64, size > 1_000_000 {
+            try? FileManager.default.removeItem(at: logURL)
+        }
+    }
+    
+    func log(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+        let fileName = (file as NSString).lastPathComponent
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "[\(timestamp)] [\(fileName):\(line)] \(message)\n"
+        
+        queue.async {
+            if let data = entry.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: self.logURL.path) {
+                    if let handle = try? FileHandle(forWritingTo: self.logURL) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        try? handle.close()
+                    }
+                } else {
+                    try? data.write(to: self.logURL)
+                }
+            }
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - Components
@@ -186,8 +227,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onboardingWindowController?.show()
     }
     
-    private func setupModelAndStart() {
-        // Set up model
+    @discardableResult
+    private func configureTranscriberIfAvailable() -> Bool {
+        if transcriber != nil {
+            return true
+        }
+        
         let installedModels = ModelDownloader.shared.installedModels()
         
         if let firstModel = installedModels.first {
@@ -196,16 +241,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             transcriber = Transcriber(modelPath: modelPath)
             statusBar.updateModelName(firstModel.displayName)
             logger.info("Using model: \(firstModel.rawValue)")
-        } else {
-            // Check for development model as fallback
-            let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
-            if FileManager.default.fileExists(atPath: devModelPath) {
-                currentModelPath = devModelPath
-                transcriber = Transcriber(modelPath: devModelPath)
-                statusBar.updateModelName("qwen3-asr-0.6b (dev)")
-                logger.info("Using development model")
-            }
+            return true
         }
+        
+        // Check for development model as fallback
+        let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
+        if FileManager.default.fileExists(atPath: devModelPath) {
+            currentModelPath = devModelPath
+            transcriber = Transcriber(modelPath: devModelPath)
+            statusBar.updateModelName("qwen3-asr-0.6b (dev)")
+            logger.info("Using development model")
+            return true
+        }
+        
+        statusBar.updateModelName(nil)
+        return false
+    }
+    
+    private func setupModelAndStart() {
+        _ = configureTranscriberIfAvailable()
         
         // Start hotkey monitor
         tryStartHotkeyMonitor()
@@ -237,9 +291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logger.warning("Already recording, ignoring")
             return 
         }
-        guard transcriber != nil else {
+        if transcriber == nil && !configureTranscriberIfAvailable() {
             logger.error("No transcriber available!")
             showError("No model installed")
+            showOnboardingForSetup()
             return
         }
         
@@ -254,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         isRecording = true
         logger.info("=== START RECORDING ===")
+        fileLogger.log("=== START RECORDING ===")
         
         // Cancel any pending dismiss from previous transcription/error
         logger.info("Canceling pending dismiss, currentDismissID was: \(self.currentDismissID?.uuidString ?? "nil")")
@@ -301,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         logger.info("=== STOP RECORDING ===")
+        fileLogger.log("=== STOP RECORDING ===")
         isRecording = false
         statusBar.showRecordingState(false)
         
@@ -312,14 +369,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("Recording stopped with \(figures.count) screenshot(s)")
         
         // Stop recording and get audio file
-        guard let audioURL = audioRecorder.stop() else {
+        let stopResult = audioRecorder.stop()
+        guard let audioURL = stopResult.url else {
             logger.error("audioRecorder.stop() returned nil!")
             recordingWindow.fadeOut()
             showError("Failed to save recording")
             return
         }
         
-        logger.info("Audio saved to \(audioURL.path)")
+        // Check if microphone captured silence (Core Audio issue)
+        if stopResult.wasSilent {
+            logger.error("Audio was silent! Peak level: \(stopResult.peakLevel). Core Audio may need restart.")
+            recordingIndicator.setState(.error("No audio"))
+            dismissIndicatorAfterDelay(extended: true)
+            
+            // Show alert with troubleshooting info
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let alert = NSAlert()
+                alert.messageText = "No Audio Detected"
+                alert.informativeText = "Your microphone isn't capturing audio. This is usually a macOS Core Audio issue.\n\nTo fix, run this command in Terminal:\nsudo killall coreaudiod\n\n(macOS will restart it automatically)"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Copy Command")
+                alert.addButton(withTitle: "OK")
+                
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString("sudo killall coreaudiod", forType: .string)
+                }
+            }
+            return
+        }
+        
+        logger.info("Audio saved to \(audioURL.path), peak level: \(stopResult.peakLevel)")
         
         // Check file exists and size
         if let attrs = try? FileManager.default.attributesOfItem(atPath: audioURL.path) {
@@ -342,6 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func transcribe(audioURL: URL, transcriptionID: UUID, figures: [CapturedFigure] = []) async {
+        var shouldDeleteTempAudio = true
         guard let transcriber = transcriber else {
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): no model, checking if stale...")
@@ -364,7 +446,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             
             if figures.isEmpty {
                 // Simple case: no figures, just transcribe
-                text = try await transcriber.transcribe(audioURL: audioURL)
+                do {
+                    text = try await transcriber.transcribe(audioURL: audioURL)
+                } catch Transcriber.TranscriptionError.noOutput {
+                    // qwen_asr can intermittently return empty output.
+                    // Retry once before fallback.
+                    logger.warning("No transcription output on first attempt, retrying once")
+                    do {
+                        text = try await transcriber.transcribe(audioURL: audioURL)
+                    } catch Transcriber.TranscriptionError.noOutput {
+                        // Fallback: chunk audio and transcribe piece-by-piece.
+                        logger.warning("Retry also returned no output, attempting chunked fallback")
+                        let chunkSeconds: Double = 2.0
+                        let splitTimes = stride(from: chunkSeconds, to: audioDuration, by: chunkSeconds).map { $0 }
+                        
+                        guard let chunks = AudioSplitter.splitWAV(at: audioURL, timestamps: splitTimes) else {
+                            throw Transcriber.TranscriptionError.noOutput
+                        }
+                        
+                        var parts: [String] = []
+                        for (index, chunk) in chunks.enumerated() {
+                            do {
+                                let part = try await transcriber.transcribe(audioURL: chunk).trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !part.isEmpty {
+                                    parts.append(part)
+                                }
+                            } catch Transcriber.TranscriptionError.noOutput {
+                                logger.info("Chunk \(index) produced no output during fallback")
+                            }
+                        }
+                        AudioSplitter.cleanupSegments(chunks)
+                        
+                        guard !parts.isEmpty else {
+                            throw Transcriber.TranscriptionError.noOutput
+                        }
+                        text = parts.joined(separator: " ")
+                    }
+                }
             } else {
                 // Interleaved case: split audio at figure timestamps and transcribe each segment
                 let timestamps = ScreenshotManager.shared.getSplitTimestamps(figures: figures)
@@ -434,7 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing error and scheduling dismiss")
                 self.recordingIndicator.setState(.error("Failed"))
-                self.dismissIndicatorAfterDelay()
+                self.scheduleIndicatorDismiss(after: 2.0)
             }
             logger.error("Transcription error: \(error.localizedDescription)")
         }
@@ -468,21 +586,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentDismissID = dismissID
         
         logger.info("Scheduling dismiss \(dismissID.uuidString.prefix(8)) after \(delay)s")
+        fileLogger.log("Scheduling dismiss \(dismissID.uuidString.prefix(8)) after \(delay)s")
         
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             
             logger.info("Dismiss \(dismissID.uuidString.prefix(8)) firing...")
+            fileLogger.log("Dismiss \(dismissID.uuidString.prefix(8)) firing, isRecording=\(self.isRecording), state=\(self.recordingIndicator.state)")
             
             // Check if this dismiss was cancelled (a new recording started)
             guard self.currentDismissID == dismissID else {
                 logger.info("Dismiss \(dismissID.uuidString.prefix(8)) cancelled (current: \(self.currentDismissID?.uuidString ?? "nil"))")
+                fileLogger.log("Dismiss \(dismissID.uuidString.prefix(8)) CANCELLED - ID mismatch")
                 return
             }
             
             // Never hide while actively recording
             if self.isRecording {
                 logger.info("Dismiss \(dismissID.uuidString.prefix(8)) skipped - recording is active")
+                fileLogger.log("Dismiss \(dismissID.uuidString.prefix(8)) SKIPPED - recording active")
                 return
             }
             
@@ -491,9 +613,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch self.recordingIndicator.state {
             case .done, .error:
                 logger.info("Dismiss \(dismissID.uuidString.prefix(8)) proceeding - state is final, calling fadeOut")
+                fileLogger.log("Dismiss \(dismissID.uuidString.prefix(8)) EXECUTING fadeOut")
                 break
             case .recording, .transcribing:
                 logger.info("Dismiss \(dismissID.uuidString.prefix(8)) skipped - state is not final")
+                fileLogger.log("Dismiss \(dismissID.uuidString.prefix(8)) SKIPPED - state not final")
                 return
             }
             
@@ -506,8 +630,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
     
-    private func dismissIndicatorAfterDelay() {
-        scheduleIndicatorDismiss(after: Constants.doneDisplayDuration)
+    private func dismissIndicatorAfterDelay(extended: Bool = false) {
+        let delay = extended ? 3.0 : Constants.doneDisplayDuration
+        scheduleIndicatorDismiss(after: delay)
     }
     
     // MARK: - Error Handling

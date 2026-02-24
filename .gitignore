@@ -32,3 +32,4 @@ Hearsay.xcodeproj/
 *.pem
 *.p12
 dist/
+package-lock.json

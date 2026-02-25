@@ -37,14 +37,14 @@ final class RecordingWindow: NSPanel {
             defer: false
         )
         
-        level = .floating
+        level = .statusBar  // High level to appear above most windows including fullscreen
         backgroundColor = .clear
         isOpaque = false
         hasShadow = true
         ignoresMouseEvents = true
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .fullScreenDisallowsTiling]
         
         // Start hidden
         alphaValue = 0
@@ -87,7 +87,14 @@ final class RecordingWindow: NSPanel {
         
         // Detailed logging for debugging pill visibility issues
         let screenInfo = NSScreen.screens.enumerated().map { "screen\($0.offset):\($0.element.frame)" }.joined(separator: ", ")
-        fileLog("fadeIn gen=\(currentGeneration) alpha=\(self.alphaValue) frame=\(self.frame) level=\(self.level.rawValue) screens=[\(screenInfo)]")
+        let contentInfo = "contentView=\(contentView != nil), hidden=\(contentView?.isHidden ?? true), needsDisplay=\(contentView?.needsDisplay ?? false)"
+        fileLog("fadeIn gen=\(currentGeneration) alpha=\(self.alphaValue) frame=\(self.frame) level=\(self.level.rawValue) \(contentInfo) screens=[\(screenInfo)]")
+        
+        // Reset window state to fix potential corruption after long runtime
+        if isVisible && alphaValue == 0 {
+            // Window thinks it's visible but alpha is 0 - order out first to reset state
+            orderOut(nil)
+        }
         
         positionOnScreen(width: Constants.indicatorWidth)
         
@@ -101,6 +108,11 @@ final class RecordingWindow: NSPanel {
         
         // Ensure window is visible and on top
         orderFrontRegardless()
+        
+        // Force window and content to redisplay (fixes state corruption after long runtime)
+        contentView?.needsDisplay = true
+        contentView?.displayIfNeeded()
+        display()
         
         logger.info("fadeIn: after orderFront, alpha: \(self.alphaValue), isVisible: \(self.isVisible), level=\(self.level.rawValue), frame=\(Int(self.frame.origin.x)),\(Int(self.frame.origin.y))")
         fileLog("fadeIn after orderFront: frame=\(self.frame) visible=\(self.isVisible) onScreen=\(self.screen?.localizedName ?? "nil")")

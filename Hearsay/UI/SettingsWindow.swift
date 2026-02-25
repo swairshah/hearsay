@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 
 /// Settings window with tabs for Settings, History, and Permissions
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
@@ -8,20 +9,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case settings
         case history
         case permissions
+        case models
     }
     
     var onHotkeyChanged: (() -> Void)?
     var onWindowOpened: (() -> Void)?
     var onWindowClosed: (() -> Void)?
+    var onModelChanged: (() -> Void)?
     
     private let tabView = NSTabView()
     private var settingsTab: SettingsTabView!
     private var historyTab: HistoryTabView!
     private var permissionsTab: PermissionsTabView!
+    private var modelsTab: ModelsTabView!
     
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -44,7 +48,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         contentView.addSubview(tabView)
         
         // Settings tab
-        settingsTab = SettingsTabView(frame: NSRect(x: 0, y: 0, width: 440, height: 380))
+        settingsTab = SettingsTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
         settingsTab.onHotkeyChanged = { [weak self] in self?.onHotkeyChanged?() }
         let settingsItem = NSTabViewItem(identifier: "settings")
         settingsItem.label = "Settings"
@@ -52,23 +56,34 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         tabView.addTabViewItem(settingsItem)
         
         // History tab
-        historyTab = HistoryTabView(frame: NSRect(x: 0, y: 0, width: 440, height: 380))
+        historyTab = HistoryTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
         let historyItem = NSTabViewItem(identifier: "history")
         historyItem.label = "History"
         historyItem.view = historyTab
         tabView.addTabViewItem(historyItem)
         
         // Permissions tab
-        permissionsTab = PermissionsTabView(frame: NSRect(x: 0, y: 0, width: 440, height: 380))
+        permissionsTab = PermissionsTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
         let permissionsItem = NSTabViewItem(identifier: "permissions")
         permissionsItem.label = "Permissions"
         permissionsItem.view = permissionsTab
         tabView.addTabViewItem(permissionsItem)
+        
+        // Models tab
+        modelsTab = ModelsTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
+        modelsTab.onModelSelected = { [weak self] in
+            self?.onModelChanged?()
+        }
+        let modelsItem = NSTabViewItem(identifier: "models")
+        modelsItem.label = "Models"
+        modelsItem.view = modelsTab
+        tabView.addTabViewItem(modelsItem)
     }
     
     func show(tab: Tab = .settings) {
         historyTab.refresh()
         permissionsTab.refresh()
+        modelsTab.refresh()
         
         switch tab {
         case .settings:
@@ -77,6 +92,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             tabView.selectTabViewItem(withIdentifier: "history")
         case .permissions:
             tabView.selectTabViewItem(withIdentifier: "permissions")
+        case .models:
+            tabView.selectTabViewItem(withIdentifier: "models")
         }
         
         window?.makeKeyAndOrderFront(nil)
@@ -85,6 +102,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // Only pause hotkeys when opening the Settings tab (shortcut recorder needs key capture).
         if tab == .settings {
             onWindowOpened?()
+        } else {
+            onWindowClosed?()
         }
     }
     
@@ -93,13 +112,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     
     func windowDidResignKey(_ notification: Notification) {
-        // Restart hotkey monitor when settings window loses focus
+        // Always resume hotkeys when window loses focus
         onWindowClosed?()
     }
     
     func windowDidBecomeKey(_ notification: Notification) {
-        // Stop hotkey monitor when settings window gains focus (for shortcut recording)
-        onWindowOpened?()
+        // Only pause hotkeys when Settings tab is active (shortcut recorder needs key capture)
+        let currentID = tabView.selectedTabViewItem?.identifier as? String
+        if currentID == "settings" {
+            onWindowOpened?()
+        } else {
+            onWindowClosed?()
+        }
     }
 }
 
@@ -265,6 +289,370 @@ private class SettingsTabView: NSView {
         UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "toggleStartModifiers")
         loadSettings()
         onHotkeyChanged?()
+    }
+}
+
+// MARK: - Models Tab
+
+private class ModelsTabView: NSView {
+    
+    var onModelSelected: (() -> Void)?
+    
+    private let titleLabel = NSTextField(labelWithString: "Manage Models")
+    private let subtitleLabel = NSTextField(labelWithString: "Choose a model and set it as active.")
+    private let modelSelector = NSStackView()
+    private var smallModelButton: SettingsModelCardView!
+    private var largeModelButton: SettingsModelCardView!
+    private let actionButton = NSButton()
+    private let progressContainer = NSView()
+    private let progressBar = NSProgressIndicator()
+    private let progressLabel = NSTextField(labelWithString: "")
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    
+    private var selectedModel: ModelDownloader.Model = .small
+    private var cancellables = Set<AnyCancellable>()
+    
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        setupBindings()
+        refresh(initial: true)
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    private func setupUI() {
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+        
+        subtitleLabel.font = .systemFont(ofSize: 13)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        addSubview(subtitleLabel)
+        
+        smallModelButton = SettingsModelCardView(model: .small, isSelected: true) { [weak self] in
+            self?.selectModel(.small)
+        }
+        largeModelButton = SettingsModelCardView(model: .large, isSelected: false) { [weak self] in
+            self?.selectModel(.large)
+        }
+        
+        modelSelector.orientation = .horizontal
+        modelSelector.spacing = 16
+        modelSelector.addArrangedSubview(smallModelButton)
+        modelSelector.addArrangedSubview(largeModelButton)
+        addSubview(modelSelector)
+        
+        actionButton.bezelStyle = .rounded
+        actionButton.controlSize = .large
+        actionButton.target = self
+        actionButton.action = #selector(actionTapped)
+        addSubview(actionButton)
+        
+        progressContainer.isHidden = true
+        addSubview(progressContainer)
+        
+        progressBar.style = .bar
+        progressBar.isIndeterminate = false
+        progressBar.minValue = 0
+        progressBar.maxValue = 1
+        progressContainer.addSubview(progressBar)
+        
+        progressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        progressLabel.textColor = .secondaryLabelColor
+        progressLabel.alignment = .center
+        progressContainer.addSubview(progressLabel)
+        
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.textColor = .tertiaryLabelColor
+        statusLabel.alignment = .center
+        progressContainer.addSubview(statusLabel)
+        
+        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.alignment = .center
+        addSubview(detailLabel)
+    }
+    
+    private func setupBindings() {
+        let downloader = ModelDownloader.shared
+        
+        downloader.$overallProgress
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] progress in
+                self?.progressBar.doubleValue = progress
+                self?.progressLabel.stringValue = "\(Int(progress * 100))%"
+            }
+            .store(in: &cancellables)
+        
+        downloader.$currentFile
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] file in
+                guard let self = self, !file.isEmpty, ModelDownloader.shared.isDownloading else { return }
+                self.statusLabel.stringValue = "Downloading \(file)..."
+            }
+            .store(in: &cancellables)
+        
+        downloader.$isDownloading
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refresh()
+            }
+            .store(in: &cancellables)
+        
+        downloader.$isComplete
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] complete in
+                guard let self = self, complete else { return }
+                self.statusLabel.stringValue = "Download complete"
+                self.refresh()
+            }
+            .store(in: &cancellables)
+        
+        downloader.$error
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] error in
+                guard let self = self, let error else { return }
+                self.statusLabel.stringValue = "Error: \(error)"
+                self.refresh()
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func selectModel(_ model: ModelDownloader.Model) {
+        selectedModel = model
+        smallModelButton.setSelected(model == .small)
+        largeModelButton.setSelected(model == .large)
+        refresh()
+    }
+    
+    func refresh(initial: Bool = false) {
+        if initial {
+            if let preferred = ModelDownloader.shared.selectedModelPreference() {
+                selectedModel = preferred
+            } else {
+                selectedModel = .small
+            }
+            smallModelButton.setSelected(selectedModel == .small)
+            largeModelButton.setSelected(selectedModel == .large)
+        }
+        
+        let downloader = ModelDownloader.shared
+        let installedSmall = downloader.isModelInstalled(.small)
+        let installedLarge = downloader.isModelInstalled(.large)
+        let selectedInstalled = downloader.isModelInstalled(selectedModel)
+        let active = downloader.selectedModelPreference()
+        
+        smallModelButton.setInstalled(installedSmall)
+        largeModelButton.setInstalled(installedLarge)
+        smallModelButton.setActive(active == .small)
+        largeModelButton.setActive(active == .large)
+        
+        if downloader.isDownloading {
+            actionButton.isHidden = true
+            progressContainer.isHidden = false
+            smallModelButton.isEnabled = false
+            largeModelButton.isEnabled = false
+        } else {
+            actionButton.isHidden = false
+            progressContainer.isHidden = true
+            smallModelButton.isEnabled = true
+            largeModelButton.isEnabled = true
+            
+            actionButton.title = selectedInstalled ? "Use Selected Model" : "Download Selected Model"
+            
+            let installedNames = downloader.installedModels().map { $0.displayName }.joined(separator: ", ")
+            if installedNames.isEmpty {
+                detailLabel.stringValue = "No models installed yet."
+            } else if let active = active {
+                detailLabel.stringValue = "Installed: \(installedNames). Active: \(active.displayName)."
+            } else {
+                detailLabel.stringValue = "Installed: \(installedNames)."
+            }
+        }
+    }
+    
+    @objc private func actionTapped() {
+        let model = selectedModel
+        let downloader = ModelDownloader.shared
+        
+        if downloader.isModelInstalled(model) {
+            downloader.setSelectedModelPreference(model)
+            statusLabel.stringValue = "Active model set to \(model.displayName)"
+            onModelSelected?()
+            refresh()
+            return
+        }
+        
+        statusLabel.stringValue = "Starting download..."
+        refresh()
+        
+        downloader.download(model) { [weak self] success in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if success {
+                    downloader.setSelectedModelPreference(model)
+                    self.statusLabel.stringValue = "Download complete"
+                    self.onModelSelected?()
+                }
+                self.refresh()
+            }
+        }
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        let centerX = bounds.midX
+        var y = bounds.height - 32
+        
+        titleLabel.frame = NSRect(x: 20, y: y - 30, width: bounds.width - 40, height: 30)
+        y -= 38
+        subtitleLabel.frame = NSRect(x: 20, y: y - 22, width: bounds.width - 40, height: 22)
+        y -= 34
+        
+        let selectorWidth: CGFloat = min(460, bounds.width - 40)
+        let selectorHeight: CGFloat = 100
+        modelSelector.frame = NSRect(x: centerX - selectorWidth/2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)
+        y -= selectorHeight + 24
+        
+        actionButton.sizeToFit()
+        let buttonWidth = max(220, actionButton.frame.width + 36)
+        actionButton.frame = NSRect(x: centerX - buttonWidth/2, y: y - 34, width: buttonWidth, height: 34)
+        
+        progressContainer.frame = NSRect(x: 60, y: y - 42, width: bounds.width - 120, height: 62)
+        progressBar.frame = NSRect(x: 0, y: 36, width: progressContainer.bounds.width, height: 18)
+        progressLabel.frame = NSRect(x: 0, y: 16, width: progressContainer.bounds.width, height: 16)
+        statusLabel.frame = NSRect(x: 0, y: 0, width: progressContainer.bounds.width, height: 15)
+        
+        detailLabel.frame = NSRect(x: 20, y: 24, width: bounds.width - 40, height: 18)
+    }
+}
+
+private class SettingsModelCardView: NSView {
+    
+    private let model: ModelDownloader.Model
+    private let onSelect: () -> Void
+    private var selected: Bool
+    private var installed: Bool = false
+    private var active: Bool = false
+    
+    private let containerBox = NSBox()
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let sizeLabel = NSTextField(labelWithString: "")
+    private let descLabel = NSTextField(labelWithString: "")
+    private let checkmark = NSTextField(labelWithString: "✓")
+    private let downloadedBadge = NSTextField(labelWithString: "✓ Downloaded")
+    private let activeBadge = NSTextField(labelWithString: "Active")
+    
+    var isEnabled: Bool = true {
+        didSet { alphaValue = isEnabled ? 1.0 : 0.5 }
+    }
+    
+    init(model: ModelDownloader.Model, isSelected: Bool, onSelect: @escaping () -> Void) {
+        self.model = model
+        self.selected = isSelected
+        self.onSelect = onSelect
+        super.init(frame: .zero)
+        setupUI()
+        updateUI()
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    private func setupUI() {
+        containerBox.boxType = .custom
+        containerBox.cornerRadius = 10
+        containerBox.borderWidth = 2
+        containerBox.fillColor = NSColor.controlBackgroundColor
+        addSubview(containerBox)
+        
+        nameLabel.stringValue = model.displayName
+        nameLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        containerBox.addSubview(nameLabel)
+        
+        sizeLabel.stringValue = model.estimatedSizeString
+        sizeLabel.font = .systemFont(ofSize: 11)
+        sizeLabel.textColor = .secondaryLabelColor
+        containerBox.addSubview(sizeLabel)
+        
+        descLabel.stringValue = model.description
+        descLabel.font = .systemFont(ofSize: 11)
+        descLabel.textColor = .tertiaryLabelColor
+        containerBox.addSubview(descLabel)
+        
+        checkmark.font = .systemFont(ofSize: 16, weight: .bold)
+        checkmark.textColor = .systemBlue
+        containerBox.addSubview(checkmark)
+        
+        downloadedBadge.font = .systemFont(ofSize: 10, weight: .medium)
+        downloadedBadge.textColor = .systemGreen
+        containerBox.addSubview(downloadedBadge)
+        
+        activeBadge.font = .systemFont(ofSize: 10, weight: .medium)
+        activeBadge.textColor = .systemBlue
+        activeBadge.alignment = .right
+        containerBox.addSubview(activeBadge)
+    }
+    
+    func setSelected(_ selected: Bool) {
+        self.selected = selected
+        updateUI()
+    }
+    
+    func setInstalled(_ installed: Bool) {
+        self.installed = installed
+        updateUI()
+    }
+    
+    func setActive(_ active: Bool) {
+        self.active = active
+        updateUI()
+    }
+    
+    private func updateUI() {
+        containerBox.borderColor = selected ? .systemBlue : .separatorColor
+        checkmark.isHidden = !selected
+        downloadedBadge.isHidden = !installed
+        activeBadge.isHidden = !active
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        containerBox.frame = bounds
+        
+        let padding: CGFloat = 12
+        let contentWidth = bounds.width - padding * 2 - 24
+        var y = bounds.height - padding - 18
+        
+        nameLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: 18)
+        checkmark.sizeToFit()
+        checkmark.frame.origin = NSPoint(x: bounds.width - padding - checkmark.frame.width, y: y)
+        
+        y -= 18
+        sizeLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: 16)
+        
+        y -= 18
+        descLabel.frame = NSRect(x: padding, y: y, width: bounds.width - padding * 2, height: 16)
+        
+        y -= 18
+        downloadedBadge.sizeToFit()
+        downloadedBadge.frame.origin = NSPoint(x: padding, y: y)
+        
+        activeBadge.sizeToFit()
+        activeBadge.frame.origin = NSPoint(x: bounds.width - padding - activeBadge.frame.width, y: y)
+    }
+    
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 220, height: 100)
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        onSelect()
     }
 }
 

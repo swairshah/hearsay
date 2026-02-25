@@ -7,6 +7,7 @@ private let downloadLogger = Logger(subsystem: "com.swair.hearsay", category: "d
 final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
     
     static let shared = ModelDownloader()
+    static let selectedModelDefaultsKey = "selectedModelId"
     
     // Model definitions
     enum Model: String, CaseIterable {
@@ -91,6 +92,17 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     }
     
     // MARK: - Public API
+    
+    func selectedModelPreference() -> Model? {
+        guard let raw = UserDefaults.standard.string(forKey: Self.selectedModelDefaultsKey) else {
+            return nil
+        }
+        return Model(rawValue: raw)
+    }
+    
+    func setSelectedModelPreference(_ model: Model) {
+        UserDefaults.standard.set(model.rawValue, forKey: Self.selectedModelDefaultsKey)
+    }
     
     /// Check if a model is installed
     func isModelInstalled(_ model: Model) -> Bool {

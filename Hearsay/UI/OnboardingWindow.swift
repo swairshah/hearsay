@@ -25,16 +25,20 @@ final class OnboardingWindowController: NSWindowController {
     }
     
     private func setupUI() {
-        // Start with permissions view
+        showPermissionsView()
+    }
+    
+    private func showPermissionsView() {
+        window?.title = "Set Up Hearsay"
         permissionsView = PermissionsContentView(frame: window!.contentView!.bounds)
         permissionsView.autoresizingMask = [.width, .height]
         permissionsView.onContinue = { [weak self] in
-            self?.showModelDownload()
+            self?.showModelDownload(animated: true)
         }
         window?.contentView = permissionsView
     }
     
-    private func showModelDownload() {
+    private func showModelDownload(animated: Bool) {
         window?.title = "Download Model"
         modelDownloadView = OnboardingContentView(frame: window!.contentView!.bounds)
         modelDownloadView.autoresizingMask = [.width, .height]
@@ -43,20 +47,31 @@ final class OnboardingWindowController: NSWindowController {
             self?.onComplete?()
         }
         
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            self.permissionsView.animator().alphaValue = 0
-        } completionHandler: {
-            self.window?.contentView = self.modelDownloadView
-            self.modelDownloadView.alphaValue = 0
+        if animated, window?.contentView === permissionsView {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
-                self.modelDownloadView.animator().alphaValue = 1
+                self.permissionsView.animator().alphaValue = 0
+            } completionHandler: {
+                self.window?.contentView = self.modelDownloadView
+                self.modelDownloadView.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.2
+                    self.modelDownloadView.animator().alphaValue = 1
+                }
             }
+        } else {
+            window?.contentView = modelDownloadView
         }
     }
     
-    func show() {
+    func showSetup() {
+        showPermissionsView()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    func showModelManager() {
+        showModelDownload(animated: false)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -451,8 +466,8 @@ private class OnboardingContentView: NSView {
         downloadButton.action = #selector(downloadTapped)
         addSubview(downloadButton)
         
-        // Update button based on selected model
-        updateDownloadButton()
+        // Apply preferred/saved selection
+        applyPreferredModelSelection()
         
         // Progress container (hidden initially)
         progressContainer.isHidden = true
@@ -559,6 +574,18 @@ private class OnboardingContentView: NSView {
         statusLabel.frame = NSRect(x: 0, y: 0, width: progressContainer.bounds.width, height: 15)
     }
     
+    private func applyPreferredModelSelection() {
+        if let preferred = ModelDownloader.shared.selectedModelPreference() {
+            selectModel(preferred)
+        } else {
+            selectModel(.small)
+        }
+    }
+    
+    private func persistSelectedModelPreference() {
+        ModelDownloader.shared.setSelectedModelPreference(selectedModel)
+    }
+    
     private func selectModel(_ model: ModelDownloader.Model) {
         selectedModel = model
         smallModelButton.setSelected(model == .small)
@@ -578,6 +605,7 @@ private class OnboardingContentView: NSView {
     @objc private func downloadTapped() {
         // If already installed, just continue
         if ModelDownloader.shared.isModelInstalled(selectedModel) {
+            persistSelectedModelPreference()
             onComplete?()
             return
         }
@@ -596,6 +624,7 @@ private class OnboardingContentView: NSView {
     
     private func downloadComplete() {
         statusLabel.stringValue = "Download complete!"
+        persistSelectedModelPreference()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.onComplete?()

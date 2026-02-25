@@ -122,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         statusBar.onShowOnboarding = { [weak self] in
-            self?.showOnboarding()
+            self?.showModels()
         }
         
         statusBar.onShowHistory = { [weak self] in
@@ -157,6 +157,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ))
         recordingIndicator.autoresizingMask = [.width, .height]
         recordingWindow.contentView?.addSubview(recordingIndicator)
+    }
+    
+    /// Recreate indicator window to avoid rare NSPanel/layer corruption after long runtimes.
+    private func refreshRecordingUIWindow() {
+        recordingWindow?.orderOut(nil)
+        
+        let newWindow = RecordingWindow()
+        let newIndicator = RecordingIndicator(frame: NSRect(
+            x: 0, y: 0,
+            width: Constants.indicatorWidth,
+            height: Constants.indicatorHeight
+        ))
+        newIndicator.autoresizingMask = [.width, .height]
+        newWindow.contentView?.addSubview(newIndicator)
+        
+        recordingWindow = newWindow
+        recordingIndicator = newIndicator
+        logger.info("Recreated recording window/indicator to reset window state")
     }
     
     private func setupAudioRecorder() {
@@ -224,37 +242,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.setupModelAndStart()
             }
         }
-        onboardingWindowController?.show()
+        onboardingWindowController?.showSetup()
     }
     
     @discardableResult
     private func configureTranscriberIfAvailable() -> Bool {
-        if transcriber != nil {
-            return true
-        }
-        
         let installedModels = ModelDownloader.shared.installedModels()
         
-        if let firstModel = installedModels.first {
-            let modelPath = Constants.modelsDirectory.appendingPathComponent(firstModel.rawValue).path
-            currentModelPath = modelPath
-            transcriber = Transcriber(modelPath: modelPath)
-            statusBar.updateModelName(firstModel.displayName)
-            logger.info("Using model: \(firstModel.rawValue)")
+        // Prefer the user's selected model if installed, otherwise fall back to first installed.
+        let preferredModel = ModelDownloader.shared.selectedModelPreference()
+        let targetModel = preferredModel.flatMap { installedModels.contains($0) ? $0 : nil } ?? installedModels.first
+        
+        if let model = targetModel {
+            let modelPath = Constants.modelsDirectory.appendingPathComponent(model.rawValue).path
+            
+            // Reconfigure if first time or if user switched model.
+            if currentModelPath != modelPath {
+                currentModelPath = modelPath
+                transcriber = Transcriber(modelPath: modelPath)
+                statusBar.updateModelName(model.displayName)
+                logger.info("Using model: \(model.rawValue)")
+            }
             return true
         }
         
         // Check for development model as fallback
         let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
         if FileManager.default.fileExists(atPath: devModelPath) {
-            currentModelPath = devModelPath
-            transcriber = Transcriber(modelPath: devModelPath)
-            statusBar.updateModelName("qwen3-asr-0.6b (dev)")
-            logger.info("Using development model")
+            if currentModelPath != devModelPath {
+                currentModelPath = devModelPath
+                transcriber = Transcriber(modelPath: devModelPath)
+                statusBar.updateModelName("qwen3-asr-0.6b (dev)")
+                logger.info("Using development model")
+            }
             return true
         }
         
         statusBar.updateModelName(nil)
+        transcriber = nil
+        currentModelPath = nil
         return false
     }
     
@@ -322,6 +348,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start screenshot session
         ScreenshotManager.shared.startSession()
         hotkeyMonitor.enableScreenshotHotKey()
+        
+        // Recreate the panel each recording start to prevent occasional "invisible but visible=true" window state.
+        refreshRecordingUIWindow()
         
         // Update UI - always show figure count indicator (works in both hold and toggle mode)
         let isToggleMode = hotkeyMonitor.state == .recordingToggle
@@ -423,7 +452,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func transcribe(audioURL: URL, transcriptionID: UUID, figures: [CapturedFigure] = []) async {
-        var shouldDeleteTempAudio = true
         guard let transcriber = transcriber else {
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): no model, checking if stale...")
@@ -645,10 +673,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - Windows
     
-    private func showOnboarding() {
-        showOnboardingForSetup()
-    }
-    
     private func showHistory() {
         if historyWindowController == nil {
             historyWindowController = HistoryWindowController()
@@ -674,6 +698,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Restart hotkey monitor when settings closes
             self?.tryStartHotkeyMonitor()
         }
+        controller.onModelChanged = { [weak self] in
+            _ = self?.configureTranscriberIfAvailable()
+        }
         settingsWindowController = controller
         return controller
     }
@@ -684,5 +711,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func showPermissions() {
         ensureSettingsWindowController().show(tab: .permissions)
+    }
+    
+    private func showModels() {
+        ensureSettingsWindowController().show(tab: .models)
     }
 }

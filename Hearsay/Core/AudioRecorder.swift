@@ -196,12 +196,15 @@ final class AudioRecorder {
         }
         
         // Convert to dB and normalize to 0-1 range
-        let minDb: Float = -60
-        let maxDb: Float = 0
+        // Narrower range [-50, -5] focuses on speech levels instead of full dynamic range
+        let minDb: Float = -50
+        let maxDb: Float = -5
         let db = 20 * log10(max(rms, 0.000001))
         let normalized = (db - minDb) / (maxDb - minDb)
-        
-        currentLevel = max(0, min(1, normalized))
+        let clamped = max(0, min(1, normalized))
+
+        // sqrt curve for perceptual mapping — quiet sounds more visible, loud sounds don't saturate
+        currentLevel = sqrt(clamped)
     }
     
     private func startLevelMonitoring() {

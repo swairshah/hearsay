@@ -197,36 +197,51 @@ final class RecordingIndicator: NSView {
 // MARK: - Waveform View
 
 private class WaveformView: NSView {
-    
-    var level: Float = 0 {
+
+    /// Current audio level (0-1), set externally at ~20Hz
+    var level: Float = 0
+
+    var isAnimating = false {
         didSet {
+            guard isAnimating != oldValue else { return }
             if isAnimating {
-                updateBars()
+                startAnimationTimer()
+            } else {
+                stopAnimationTimer()
             }
         }
     }
-    
-    var isAnimating = true
-    
+
     private var bars: [CALayer] = []
     private let barCount = 7
-    private var previousLevels: [Float] = []
-    
+
+    // Per-bar smoothed heights
+    private var barHeights: [Float] = []
+    // Smoothed input level (fast attack, slow decay)
+    private var smoothedLevel: Float = 0
+    private var animationTimer: Timer?
+    private var animationTime: Double = 0
+
+    // Bar gain envelope — center bars taller, edges shorter for natural waveform shape
+    private let barGains: [Float] = [0.55, 0.8, 0.95, 1.0, 0.9, 0.75, 0.5]
+    // Phase offsets for subtle per-bar sinusoidal variation
+    private let barPhases: [Float] = [0, 0.9, 1.8, 2.7, 3.6, 4.5, 5.4]
+
     override init(frame frameRect: NSRect) {
-        previousLevels = Array(repeating: 0.3, count: barCount)
+        barHeights = Array(repeating: 0.05, count: barCount)
         super.init(frame: frameRect)
         setupBars()
     }
-    
+
     required init?(coder: NSCoder) {
-        previousLevels = Array(repeating: 0.3, count: barCount)
+        barHeights = Array(repeating: 0.05, count: barCount)
         super.init(coder: coder)
         setupBars()
     }
-    
+
     private func setupBars() {
         wantsLayer = true
-        
+
         for _ in 0..<barCount {
             let bar = CALayer()
             bar.backgroundColor = NSColor.white.cgColor
@@ -235,48 +250,87 @@ private class WaveformView: NSView {
             bars.append(bar)
         }
     }
-    
+
     func setStatic(_ isStatic: Bool) {
         if isStatic {
-            // Set all bars to medium height
-            previousLevels = Array(repeating: 0.4, count: barCount)
-            updateBars()
+            smoothedLevel = 0.35
+            barHeights = barGains.map { 0.35 * $0 }
+            renderBars()
         }
     }
-    
+
     override func layout() {
         super.layout()
-        updateBars()
+        renderBars()
     }
-    
-    private func updateBars() {
+
+    // MARK: - Animation
+
+    private func startAnimationTimer() {
+        animationTime = 0
+        smoothedLevel = 0
+        barHeights = Array(repeating: 0.05, count: barCount)
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+    }
+
+    private func stopAnimationTimer() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+    }
+
+    private func tick() {
+        animationTime += 1.0 / 60.0
+
+        // Smooth input level: fast attack (respond to speech), slow decay (hold during pauses)
+        let attack: Float = 0.35
+        let decay: Float = 0.12
+        if level > smoothedLevel {
+            smoothedLevel += (level - smoothedLevel) * attack
+        } else {
+            smoothedLevel += (level - smoothedLevel) * decay
+        }
+
+        for i in 0..<barCount {
+            // Target from smoothed level scaled by this bar's gain
+            var target = smoothedLevel * barGains[i]
+
+            // Subtle sinusoidal wobble — amplitude scales with level so silence is still
+            let wobble = sin(Float(animationTime * 2.5) + barPhases[i]) * 0.04 * max(smoothedLevel, 0.1)
+            target += wobble
+
+            // Clamp with a low idle floor
+            target = max(0.05, min(1.0, target))
+
+            // Per-bar smoothing for fluid motion
+            barHeights[i] += (target - barHeights[i]) * 0.3
+        }
+
+        renderBars()
+    }
+
+    private func renderBars() {
         let barWidth: CGFloat = 3
         let spacing: CGFloat = 5
         let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * spacing
         let startX = (bounds.width - totalWidth) / 2
         let maxHeight = bounds.height - 4
-        let minHeight: CGFloat = 6
-        
-        if isAnimating {
-            // Shift previous levels and add new one with some variation
-            previousLevels.removeFirst()
-            let jitteredLevel = level + Float.random(in: -0.15...0.15)
-            previousLevels.append(max(0.1, min(1, jitteredLevel)))
-        }
-        
+        let minHeight: CGFloat = 4
+
         CATransaction.begin()
-        CATransaction.setAnimationDuration(0.08)
-        
+        CATransaction.setDisableActions(true) // We handle all smoothing ourselves
+
         for (index, bar) in bars.enumerated() {
-            let barLevel = previousLevels[index]
-            let height = minHeight + CGFloat(barLevel) * (maxHeight - minHeight)
-            
+            let barLevel = CGFloat(barHeights[index])
+            let height = minHeight + barLevel * (maxHeight - minHeight)
+
             let x = startX + CGFloat(index) * (barWidth + spacing)
             let y = (bounds.height - height) / 2
-            
+
             bar.frame = NSRect(x: x, y: y, width: barWidth, height: height)
         }
-        
+
         CATransaction.commit()
     }
 }

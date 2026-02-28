@@ -139,6 +139,7 @@ private class SettingsTabView: NSView {
     
     private let generalBox = NSBox()
     private let dockIconCheckbox = NSButton(checkboxWithTitle: "Show Dock Icon", target: nil, action: nil)
+    private let soundEffectsCheckbox = NSButton(checkboxWithTitle: "Sound Effects", target: nil, action: nil)
     
     private let shortcutsBox = NSBox()
     private let holdKeyLabel = NSTextField(labelWithString: "Hold to Record")
@@ -184,6 +185,10 @@ private class SettingsTabView: NSView {
         dockIconCheckbox.action = #selector(dockIconChanged(_:))
         generalBox.contentView?.addSubview(dockIconCheckbox)
         
+        soundEffectsCheckbox.target = self
+        soundEffectsCheckbox.action = #selector(soundEffectsChanged(_:))
+        generalBox.contentView?.addSubview(soundEffectsCheckbox)
+        
         // Shortcuts box
         shortcutsBox.title = "Shortcuts"
         shortcutsBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
@@ -217,6 +222,7 @@ private class SettingsTabView: NSView {
     
     private func loadSettings() {
         dockIconCheckbox.state = UserDefaults.standard.bool(forKey: "showDockIcon") ? .on : .off
+        soundEffectsCheckbox.state = SoundPlayer.shared.isEnabled ? .on : .off
         
         holdKeyRecorder.setShortcut(Shortcut(
             keyCode: UserDefaults.standard.object(forKey: "holdKeyCode") as? Int ?? 61,
@@ -248,11 +254,12 @@ private class SettingsTabView: NSView {
         y -= 28
         
         // General box
-        generalBox.frame = NSRect(x: pad, y: y - 54, width: boxW, height: 54)
+        generalBox.frame = NSRect(x: pad, y: y - 74, width: boxW, height: 74)
         if let cv = generalBox.contentView {
-            dockIconCheckbox.frame = NSRect(x: 12, y: (cv.bounds.height - 20) / 2, width: 200, height: 20)
+            soundEffectsCheckbox.frame = NSRect(x: 12, y: cv.bounds.height - 28, width: 200, height: 20)
+            dockIconCheckbox.frame = NSRect(x: 12, y: cv.bounds.height - 50, width: 200, height: 20)
         }
-        y -= 66
+        y -= 86
         
         // Shortcuts box
         shortcutsBox.frame = NSRect(x: pad, y: y - 108, width: boxW, height: 108)
@@ -275,6 +282,10 @@ private class SettingsTabView: NSView {
         
         resetButton.sizeToFit()
         resetButton.frame.origin = NSPoint(x: inputX + inputW + 16, y: cv.bounds.height - 34)
+    }
+    
+    @objc private func soundEffectsChanged(_ sender: NSButton) {
+        SoundPlayer.shared.isEnabled = sender.state == .on
     }
     
     @objc private func dockIconChanged(_ sender: NSButton) {

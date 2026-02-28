@@ -117,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if enabled {
                 self?.tryStartHotkeyMonitor()
             } else {
+                // Prevent stuck recording indicator if monitoring is disabled mid-recording.
+                if self?.isRecording == true {
+                    self?.stopRecording()
+                }
                 self?.hotkeyMonitor.stop()
             }
         }
@@ -204,10 +208,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.captureScreenshot()
         }
         
-        // Set up screenshot manager callback
+        // Set up screenshot manager callback — fires when screenshot is actually saved (after drag+release)
         ScreenshotManager.shared.onScreenshotCaptured = { [weak self] count in
             guard let self = self else { return }
             logger.info("Screenshot captured: count=\(count)")
+            SoundPlayer.shared.play(.screenshot)
             self.recordingIndicator.figureCount = count
             // Resize window to fit new indicator width
             self.recordingWindow.positionOnScreen(width: self.recordingIndicator.idealWidth)
@@ -337,6 +342,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("=== START RECORDING ===")
         fileLogger.log("=== START RECORDING ===")
         
+        // Play start sound
+        SoundPlayer.shared.play(.recordingStart)
+        
         // Cancel any pending dismiss from previous transcription/error
         logger.info("Canceling pending dismiss, currentDismissID was: \(self.currentDismissID?.uuidString ?? "nil")")
         cancelPendingIndicatorDismiss()
@@ -388,6 +396,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("=== STOP RECORDING ===")
         fileLogger.log("=== STOP RECORDING ===")
         isRecording = false
+        
+        // Play stop sound
+        SoundPlayer.shared.play(.recordingStop)
         statusBar.showRecordingState(false)
         
         // End screenshot session and disable hotkey
@@ -406,26 +417,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
-        // Check if microphone captured silence (Core Audio issue)
+        // Check if microphone captured silence (possible Core Audio issue)
         if stopResult.wasSilent {
-            logger.error("Audio was silent! Peak level: \(stopResult.peakLevel). Core Audio may need restart.")
+            logger.error("Audio was silent! Peak level: \(stopResult.peakLevel)")
             recordingIndicator.setState(.error("No audio"))
             dismissIndicatorAfterDelay(extended: true)
-            
-            // Show alert with troubleshooting info
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                let alert = NSAlert()
-                alert.messageText = "No Audio Detected"
-                alert.informativeText = "Your microphone isn't capturing audio. This is usually a macOS Core Audio issue.\n\nTo fix, run this command in Terminal:\nsudo killall coreaudiod\n\n(macOS will restart it automatically)"
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "Copy Command")
-                alert.addButton(withTitle: "OK")
-                
-                if alert.runModal() == .alertFirstButtonReturn {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("sudo killall coreaudiod", forType: .string)
-                }
-            }
             return
         }
         
@@ -550,8 +546,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
                 
-                // Insert text
+                // Insert text and play paste sound
                 TextInserter.insert(text)
+                SoundPlayer.shared.play(.paste)
                 
                 // Save to history (save raw text for cleaner history)
                 HistoryStore.shared.add(text: text, durationSeconds: audioDuration)
@@ -691,6 +688,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.hotkeyMonitor.loadSettings()
         }
         controller.onWindowOpened = { [weak self] in
+            // Stop an in-flight recording before pausing hotkeys for shortcut capture,
+            // otherwise the indicator can get stuck in recording state.
+            if self?.isRecording == true {
+                self?.stopRecording()
+            }
             // Stop hotkey monitor while settings is open to allow shortcut recording
             self?.hotkeyMonitor.stop()
         }

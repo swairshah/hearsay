@@ -33,3 +33,4 @@ Hearsay.xcodeproj/
 *.p12
 dist/
 package-lock.json
+.dev/

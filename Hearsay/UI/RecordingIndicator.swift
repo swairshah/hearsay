@@ -195,6 +195,8 @@ final class RecordingIndicator: NSView {
 }
 
 // MARK: - Waveform View
+// Replicates Wispr Flow's waveform: 10 bars, bell-curve heights, looping wave animation,
+// scaled by audio level.
 
 private class WaveformView: NSView {
 
@@ -213,39 +215,47 @@ private class WaveformView: NSView {
     }
 
     private var bars: [CALayer] = []
-    private let barCount = 7
+    private let barCount = 10
 
-    // Per-bar smoothed heights
-    private var barHeights: [Float] = []
     // Smoothed input level (fast attack, slow decay)
     private var smoothedLevel: Float = 0
     private var animationTimer: Timer?
     private var animationTime: Double = 0
 
-    // Bar gain envelope — center bars taller, edges shorter for natural waveform shape
-    private let barGains: [Float] = [0.55, 0.8, 0.95, 1.0, 0.9, 0.75, 0.5]
-    // Phase offsets for subtle per-bar sinusoidal variation
-    private let barPhases: [Float] = [0, 0.9, 1.8, 2.7, 3.6, 4.5, 5.4]
+    // Bell-curve height scale per bar: max(0, 1 - pow(abs(4.5 - i), 2) / 48)
+    // Center bars are tallest, edges taper off
+    private let barHeightScales: [Float] = {
+        (0..<10).map { i in
+            let dist = abs(4.5 - Float(i))
+            return max(0, 1 - pow(dist, 2) / 48)
+        }
+    }()
+
+    // Phase offsets per bar for staggered wave animation (from Wispr Flow's animationDelay)
+    // i < 5: 0.1*i,  i >= 5: 0.1*(i-10)  → mapped to phase in a 1s cycle (×2π)
+    private let barPhases: [Float] = {
+        (0..<10).map { i in
+            let delay: Float = i < 5 ? 0.1 * Float(i) : 0.1 * Float(i - 10)
+            return delay * 2 * .pi  // convert seconds-in-1s-cycle to radians
+        }
+    }()
 
     override init(frame frameRect: NSRect) {
-        barHeights = Array(repeating: 0.05, count: barCount)
         super.init(frame: frameRect)
         setupBars()
     }
 
     required init?(coder: NSCoder) {
-        barHeights = Array(repeating: 0.05, count: barCount)
         super.init(coder: coder)
         setupBars()
     }
 
     private func setupBars() {
         wantsLayer = true
-
         for _ in 0..<barCount {
             let bar = CALayer()
             bar.backgroundColor = NSColor.white.cgColor
-            bar.cornerRadius = 1.5
+            bar.cornerRadius = 1
             layer?.addSublayer(bar)
             bars.append(bar)
         }
@@ -253,15 +263,14 @@ private class WaveformView: NSView {
 
     func setStatic(_ isStatic: Bool) {
         if isStatic {
-            smoothedLevel = 0.35
-            barHeights = barGains.map { 0.35 * $0 }
-            renderBars()
+            smoothedLevel = 0.2
+            renderBars(waveMultipliers: Array(repeating: 1.0, count: barCount))
         }
     }
 
     override func layout() {
         super.layout()
-        renderBars()
+        renderBars(waveMultipliers: Array(repeating: 1.0, count: barCount))
     }
 
     // MARK: - Animation
@@ -269,7 +278,6 @@ private class WaveformView: NSView {
     private func startAnimationTimer() {
         animationTime = 0
         smoothedLevel = 0
-        barHeights = Array(repeating: 0.05, count: barCount)
         animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -280,52 +288,78 @@ private class WaveformView: NSView {
         animationTimer = nil
     }
 
+    /// Compute wave multiplier matching Wispr Flow's CSS keyframes:
+    ///   0%→1.0, 20%→1.2, 40%→1.5, 80%→1.1, 90%→1.3, 100%→1.0
+    private func waveMultiplier(at phase: Float) -> Float {
+        // Normalize phase to 0-1
+        var t = phase / (2 * .pi)
+        t = t - floor(t)  // wrap to [0,1)
+
+        // Keyframe stops
+        let stops: [(Float, Float)] = [
+            (0.0, 1.0), (0.2, 1.2), (0.4, 1.5),
+            (0.8, 1.1), (0.9, 1.3), (1.0, 1.0)
+        ]
+
+        // Find surrounding keyframes and interpolate
+        for i in 1..<stops.count {
+            if t <= stops[i].0 {
+                let (t0, v0) = stops[i - 1]
+                let (t1, v1) = stops[i]
+                let frac = (t - t0) / (t1 - t0)
+                // ease-in-out approximation
+                let eased = frac * frac * (3 - 2 * frac)
+                return v0 + (v1 - v0) * eased
+            }
+        }
+        return 1.0
+    }
+
     private func tick() {
         animationTime += 1.0 / 60.0
 
-        // Smooth input level: fast attack (respond to speech), slow decay (hold during pauses)
+        // Smooth input level: fast attack, slow decay
         let attack: Float = 0.35
-        let decay: Float = 0.12
+        let decay: Float = 0.08
         if level > smoothedLevel {
             smoothedLevel += (level - smoothedLevel) * attack
         } else {
             smoothedLevel += (level - smoothedLevel) * decay
         }
 
+        // Audio scale matches Wispr Flow: max(1, 5 * audioLevel)
+        let audioScale = max(Float(1), 5 * smoothedLevel)
+
+        // Current animation phase (1 cycle per second)
+        let basePhase = Float(animationTime) * 2 * .pi
+
+        // Compute per-bar wave multipliers
+        var multipliers = [Float](repeating: 1.0, count: barCount)
         for i in 0..<barCount {
-            // Target from smoothed level scaled by this bar's gain
-            var target = smoothedLevel * barGains[i]
-
-            // Subtle sinusoidal wobble — amplitude scales with level so silence is still
-            let wobble = sin(Float(animationTime * 2.5) + barPhases[i]) * 0.04 * max(smoothedLevel, 0.1)
-            target += wobble
-
-            // Clamp with a low idle floor
-            target = max(0.05, min(1.0, target))
-
-            // Per-bar smoothing for fluid motion
-            barHeights[i] += (target - barHeights[i]) * 0.3
+            multipliers[i] = waveMultiplier(at: basePhase + barPhases[i]) * audioScale
         }
 
-        renderBars()
+        renderBars(waveMultipliers: multipliers)
     }
 
-    private func renderBars() {
-        let barWidth: CGFloat = 3
-        let spacing: CGFloat = 5
-        let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * spacing
+    private func renderBars(waveMultipliers: [Float]) {
+        let barWidth: CGFloat = 2
+        let gap: CGFloat = 1.5
+        let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * gap
         let startX = (bounds.width - totalWidth) / 2
-        let maxHeight = bounds.height - 4
-        let minHeight: CGFloat = 4
+
+        let baseHeight: CGFloat = 6  // Minimum bar height
+        let maxBarHeight = bounds.height - 2
 
         CATransaction.begin()
-        CATransaction.setDisableActions(true) // We handle all smoothing ourselves
+        CATransaction.setDisableActions(true)
 
-        for (index, bar) in bars.enumerated() {
-            let barLevel = CGFloat(barHeights[index])
-            let height = minHeight + barLevel * (maxHeight - minHeight)
+        for (i, bar) in bars.enumerated() {
+            // Scale from base height using bell curve * audio * wave animation
+            let scaleY = CGFloat(barHeightScales[i]) * CGFloat(waveMultipliers[i])
+            let height = max(baseHeight, min(maxBarHeight, baseHeight * scaleY))
 
-            let x = startX + CGFloat(index) * (barWidth + spacing)
+            let x = startX + CGFloat(i) * (barWidth + gap)
             let y = (bounds.height - height) / 2
 
             bar.frame = NSRect(x: x, y: y, width: barWidth, height: height)

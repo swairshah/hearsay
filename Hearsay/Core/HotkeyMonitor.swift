@@ -15,7 +15,14 @@ final class HotkeyMonitor {
         case recordingToggle  // Toggle mode - press toggle combo again to stop
     }
     
+    /// How the record key activates recording
+    enum ActivationMode: Int {
+        case hold = 0       // Press and hold → release to stop
+        case doubleTap = 1  // Tap twice quickly → tap once to stop
+    }
+    
     // Keycodes (configurable)
+    private var activationMode: ActivationMode = .hold
     private var holdKeyCode: Int64 = 61  // Default: Right Option
     private var toggleStartKeyCode: Int64 = 49  // Default: Space
     private var toggleStartModifiers: UInt64 = 0  // Default: Option
@@ -37,10 +44,11 @@ final class HotkeyMonitor {
     private var toggleHotKeyRef: EventHotKeyRef?
     private let toggleHotKeyID: UInt32 = 1
     
-    // Screenshot hotkey (Option+4)
+    // Screenshot hotkey (configurable, default Option+4)
     private var screenshotHotKeyRef: EventHotKeyRef?
     private let screenshotHotKeyID: UInt32 = 2
-    private let screenshotKeyCode: UInt32 = 21  // '4' key
+    private var screenshotKeyCode: UInt32 = 21  // '4' key
+    private var screenshotModifiers: UInt64 = UInt64(CGEventFlags.maskAlternate.rawValue)
     
     private let tapDisableWindow: TimeInterval = 10.0
     private let maxTapDisableEventsBeforeRestart = 3
@@ -49,6 +57,12 @@ final class HotkeyMonitor {
     // Track if hold key is held alone (no other modifiers/keys)
     private var rightOptionDownAlone = false
     private var holdModifierWasPressed = false
+    
+    // Double-tap detection
+    private var lastTapTime: Date?
+    private var keyDownTime: Date?
+    private let tapMaxDuration: TimeInterval = 0.3     // Max press duration to count as a tap
+    private let doubleTapWindow: TimeInterval = 0.4     // Max gap between two taps
     
     init() {
         loadSettings()
@@ -64,11 +78,17 @@ final class HotkeyMonitor {
     
     /// Reload hotkey settings from UserDefaults
     func loadSettings() {
+        activationMode = ActivationMode(rawValue: UserDefaults.standard.integer(forKey: "activationMode")) ?? .hold
         holdKeyCode = Int64(UserDefaults.standard.object(forKey: "holdKeyCode") as? Int ?? 61)
         toggleStartKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStartKeyCode") as? Int ?? 49)
         toggleStartModifiers = UInt64(UserDefaults.standard.object(forKey: "toggleStartModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
         toggleStopKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStopKeyCode") as? Int ?? 49)
-        hotkeyLogger.info("Hotkeys loaded: hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), toggleStop=\(self.toggleStopKeyCode)")
+        screenshotKeyCode = UInt32(UserDefaults.standard.object(forKey: "screenshotKeyCode") as? Int ?? 21)
+        screenshotModifiers = UInt64(UserDefaults.standard.object(forKey: "screenshotModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
+        hotkeyLogger.info("Hotkeys loaded: activation=\(self.activationMode.rawValue), hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), screenshot=\(self.screenshotKeyCode)+\(self.screenshotModifiers)")
+        // Reset double-tap state when settings change
+        lastTapTime = nil
+        keyDownTime = nil
         
         if hotKeyHandler != nil {
             registerToggleHotKey()
@@ -239,6 +259,15 @@ final class HotkeyMonitor {
         
         let otherModifiers = hasOtherModifierFlags(flags, excludingHoldKeyCode: holdKeyCode)
         
+        switch activationMode {
+        case .hold:
+            pollHoldMode(holdJustPressed: holdJustPressed, holdJustReleased: holdJustReleased, otherModifiers: otherModifiers)
+        case .doubleTap:
+            pollDoubleTapMode(holdKeyDown: holdKeyDown, holdJustPressed: holdJustPressed, holdJustReleased: holdJustReleased, otherModifiers: otherModifiers)
+        }
+    }
+    
+    private func pollHoldMode(holdJustPressed: Bool, holdJustReleased: Bool, otherModifiers: Bool) {
         if state == .idle {
             if holdJustPressed && !otherModifiers {
                 hotkeyLogger.info("HOLD KEY DOWN (poll) - starting HOLD recording")
@@ -275,6 +304,59 @@ final class HotkeyMonitor {
         }
     }
     
+    private func pollDoubleTapMode(holdKeyDown: Bool, holdJustPressed: Bool, holdJustReleased: Bool, otherModifiers: Bool) {
+        let now = Date()
+        
+        if holdJustPressed {
+            keyDownTime = now
+        }
+        
+        if holdJustReleased && !otherModifiers {
+            // Check if this release was a quick tap (not a long press)
+            let wasTap: Bool
+            if let downTime = keyDownTime {
+                wasTap = now.timeIntervalSince(downTime) < tapMaxDuration
+            } else {
+                wasTap = false
+            }
+            keyDownTime = nil
+            
+            guard wasTap else { return }
+            
+            if state == .recordingToggle {
+                // Single tap while recording → stop
+                hotkeyLogger.info("DOUBLE-TAP MODE: single tap → stopping recording")
+                state = .idle
+                rightOptionDownAlone = false
+                DispatchQueue.main.async { [weak self] in
+                    self?.onRecordingStop?()
+                }
+                lastTapTime = nil
+                return
+            }
+            
+            if state == .idle {
+                // Check for double-tap
+                if let last = lastTapTime, now.timeIntervalSince(last) < doubleTapWindow {
+                    hotkeyLogger.info("DOUBLE-TAP MODE: double tap detected → starting recording")
+                    state = .recordingToggle
+                    lastTapTime = nil
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onRecordingStart?()
+                    }
+                } else {
+                    // First tap — wait for second
+                    lastTapTime = now
+                }
+            }
+        }
+        
+        // Also allow toggle combo to stop recording in double-tap mode
+        if state == .recordingToggle && holdJustReleased {
+            rightOptionDownAlone = false
+        }
+    }
+    
     // MARK: - Event Handling
     
     private func handleEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -295,37 +377,47 @@ final class HotkeyMonitor {
         let holdJustReleased = !holdKeyIsPressed && holdModifierWasPressed
         defer { holdModifierWasPressed = holdKeyIsPressed }
         
-        if state == .idle {
-            // Use modifier transition rather than strict keycode equality.
-            // This is more reliable across keyboards/layouts for right-side modifiers.
-            if holdJustPressed && !otherModifiers {
-                hotkeyLogger.info("HOLD KEY DOWN - starting HOLD recording")
-                rightOptionDownAlone = true
-                state = .recordingHold
-                DispatchQueue.main.async { [weak self] in
-                    self?.onRecordingStart?()
+        // The event tap handles the same logic as polling but via events.
+        // Double-tap mode is handled by pollDoubleTapMode via the polling timer,
+        // but the event tap provides faster response for hold mode.
+        
+        switch activationMode {
+        case .hold:
+            if state == .idle {
+                if holdJustPressed && !otherModifiers {
+                    hotkeyLogger.info("HOLD KEY DOWN - starting HOLD recording")
+                    rightOptionDownAlone = true
+                    state = .recordingHold
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onRecordingStart?()
+                    }
+                }
+            } else if state == .recordingHold {
+                if holdJustReleased {
+                    hotkeyLogger.info("HOLD KEY UP - stopping HOLD recording")
+                    rightOptionDownAlone = false
+                    state = .idle
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onRecordingStop?()
+                    }
+                } else if otherModifiers && rightOptionDownAlone {
+                    hotkeyLogger.info("Other modifier pressed - canceling HOLD recording")
+                    rightOptionDownAlone = false
+                    state = .idle
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onRecordingStop?()
+                    }
+                }
+            } else if state == .recordingToggle {
+                if holdJustReleased {
+                    rightOptionDownAlone = false
                 }
             }
-        } else if state == .recordingHold {
-            if holdJustReleased {
-                hotkeyLogger.info("HOLD KEY UP - stopping HOLD recording")
-                rightOptionDownAlone = false
-                state = .idle
-                DispatchQueue.main.async { [weak self] in
-                    self?.onRecordingStop?()
-                }
-            } else if otherModifiers && rightOptionDownAlone {
-                hotkeyLogger.info("Other modifier pressed - canceling HOLD recording")
-                rightOptionDownAlone = false
-                state = .idle
-                DispatchQueue.main.async { [weak self] in
-                    self?.onRecordingStop?()
-                }
-            }
-        } else if state == .recordingToggle {
-            if holdJustReleased {
-                rightOptionDownAlone = false
-            }
+            
+        case .doubleTap:
+            // Double-tap detection is handled in pollDoubleTapMode for consistency.
+            // The event tap just tracks modifier state (holdModifierWasPressed is updated above).
+            break
         }
         
         return Unmanaged.passUnretained(event)
@@ -437,15 +529,15 @@ final class HotkeyMonitor {
         }
     }
     
-    // MARK: - Screenshot Hotkey (Option+4)
+    // MARK: - Screenshot Hotkey
     
     private func registerScreenshotHotKey() {
         unregisterScreenshotHotKey()
         
-        let hotKeyID = EventHotKeyID(signature: fourCharCode("HSY2"), id: screenshotHotKeyID)
+        guard screenshotKeyCode > 0 else { return }
         
-        // Option modifier
-        let carbonModifiers = UInt32(optionKey)
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("HSY2"), id: screenshotHotKeyID)
+        let carbonModifiers = carbonModifiersFromCGFlags(screenshotModifiers)
         
         let status = RegisterEventHotKey(
             screenshotKeyCode,
@@ -457,9 +549,9 @@ final class HotkeyMonitor {
         )
         
         if status != noErr {
-            hotkeyLogger.error("Failed to register screenshot hotkey: status=\(status)")
+            hotkeyLogger.error("Failed to register screenshot hotkey: keyCode=\(self.screenshotKeyCode), modifiers=\(self.screenshotModifiers), status=\(status)")
         } else {
-            hotkeyLogger.info("Registered screenshot hotkey: Option+4")
+            hotkeyLogger.info("Registered screenshot hotkey: keyCode=\(self.screenshotKeyCode), carbonModifiers=\(carbonModifiers)")
         }
     }
     

@@ -151,10 +151,7 @@ private class PermissionsContentView: NSView {
             description: "Handles hotkeys and pasting text",
             buttonTitle: "Open Settings",
             onAction: {
-                PermissionsManager.requestAccessibility()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    PermissionsManager.openAccessibilitySettings()
-                }
+                PermissionsManager.openAccessibilitySettings()
             }
         )
         
@@ -164,9 +161,8 @@ private class PermissionsContentView: NSView {
             buttonTitle: "Open Settings",
             note: "May need to restart app after granting",
             onAction: {
-                // First request access - this adds our app to the list in System Settings
+                // requestScreenRecording() registers the app in the System Settings list
                 PermissionsManager.requestScreenRecording()
-                // Then open settings so user can enable it
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     PermissionsManager.openScreenRecordingSettings()
                 }

@@ -9,6 +9,7 @@ BUILD_APP="build/Build/Products/Debug/Hearsay.app"
 DEV_APP=".dev/Hearsay.app"
 DEV_BIN="$DEV_APP/Contents/MacOS/Hearsay"
 BINARY_SRC="$HOME/work/misc/qwen-asr/qwen_asr"
+SIGN_IDENTITY="Hearsay Dev"  # Self-signed cert for stable TCC permissions
 
 # Colors
 RED='\033[0;31m'
@@ -42,6 +43,14 @@ if [ ! -d "$BUILD_APP" ]; then
     exit 1
 fi
 
+# Check that signing identity exists
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+    echo -e "${RED}Signing certificate '$SIGN_IDENTITY' not found!${NC}"
+    echo -e "Run this once to create it:"
+    echo -e "  ${YELLOW}./setup-cert.sh${NC}"
+    exit 1
+fi
+
 # Create stable dev app bundle if it doesn't exist yet
 # This bundle persists across builds so TCC permissions stick
 if [ ! -d "$DEV_APP" ]; then
@@ -52,11 +61,11 @@ if [ ! -d "$DEV_APP" ]; then
     # Bundle qwen_asr
     if [ -f "$BINARY_SRC" ]; then
         cp "$BINARY_SRC" "$DEV_APP/Contents/MacOS/"
-        codesign --force --sign - "$DEV_APP/Contents/MacOS/qwen_asr"
+        codesign --force --sign "$SIGN_IDENTITY" "$DEV_APP/Contents/MacOS/qwen_asr"
     fi
 
-    # Sign the whole bundle
-    codesign --force --sign - "$DEV_APP"
+    # Sign the whole bundle with the persistent certificate
+    codesign --force --sign "$SIGN_IDENTITY" "$DEV_APP"
 
     echo ""
     echo -e "${YELLOW}First run — you need to grant Accessibility permission once.${NC}"
@@ -71,7 +80,7 @@ if [ ! -d "$DEV_APP" ]; then
         read
     fi
 else
-    # Update only the binary + resources in the stable bundle
+    # Update the binary + resources in the stable bundle
     echo -e "${YELLOW}Updating dev app bundle...${NC}"
     cp "$BUILD_APP/Contents/MacOS/Hearsay" "$DEV_BIN"
     # Also copy debug dylib and any other supporting binaries
@@ -87,9 +96,17 @@ if [ -f "$BINARY_SRC" ]; then
     if [ ! -f "$DEV_APP/Contents/MacOS/qwen_asr" ] || [ "$BINARY_SRC" -nt "$DEV_APP/Contents/MacOS/qwen_asr" ]; then
         echo -e "${YELLOW}Updating qwen_asr binary...${NC}"
         cp "$BINARY_SRC" "$DEV_APP/Contents/MacOS/"
-        codesign --force --sign - "$DEV_APP/Contents/MacOS/qwen_asr"
     fi
 fi
+
+# Re-sign the bundle after any updates (same identity = TCC permissions persist)
+# Nested binaries must be signed before the outer bundle
+echo -e "${YELLOW}Signing with '$SIGN_IDENTITY'...${NC}"
+for nested in "$DEV_APP/Contents/MacOS/"*; do
+    [ -f "$nested" ] && [ -x "$nested" ] && [ "$(basename "$nested")" != "Hearsay" ] && \
+        codesign --force --sign "$SIGN_IDENTITY" "$nested" 2>/dev/null || true
+done
+codesign --force --sign "$SIGN_IDENTITY" "$DEV_APP"
 
 # Launch the binary directly (preserves TCC permissions)
 echo -e "${GREEN}Launching Hearsay (dev mode)...${NC}"

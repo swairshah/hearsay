@@ -10,6 +10,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case history
         case permissions
         case models
+        case microphone
     }
     
     var onHotkeyChanged: (() -> Void)?
@@ -22,6 +23,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var historyTab: HistoryTabView!
     private var permissionsTab: PermissionsTabView!
     private var modelsTab: ModelsTabView!
+    private var microphoneTab: MicrophoneTabView!
     
     convenience init() {
         let window = NSWindow(
@@ -78,12 +80,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         modelsItem.label = "Models"
         modelsItem.view = modelsTab
         tabView.addTabViewItem(modelsItem)
+        
+        // Microphone tab
+        microphoneTab = MicrophoneTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
+        let micItem = NSTabViewItem(identifier: "microphone")
+        micItem.label = "Microphone"
+        micItem.view = microphoneTab
+        tabView.addTabViewItem(micItem)
     }
     
     func show(tab: Tab = .settings) {
         historyTab.refresh()
         permissionsTab.refresh()
         modelsTab.refresh()
+        microphoneTab.refresh()
         
         switch tab {
         case .settings:
@@ -94,6 +104,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             tabView.selectTabViewItem(withIdentifier: "permissions")
         case .models:
             tabView.selectTabViewItem(withIdentifier: "models")
+        case .microphone:
+            tabView.selectTabViewItem(withIdentifier: "microphone")
         }
         
         window?.makeKeyAndOrderFront(nil)
@@ -140,6 +152,10 @@ private class SettingsTabView: NSView {
     private let generalBox = NSBox()
     private let dockIconCheckbox = NSButton(checkboxWithTitle: "Show Dock Icon", target: nil, action: nil)
     private let soundEffectsCheckbox = NSButton(checkboxWithTitle: "Sound Effects", target: nil, action: nil)
+    private let maxHistoryLabel = NSTextField(labelWithString: "Max History Size")
+    private let maxHistorySlider = NSSlider()
+    private let maxHistoryValueLabel = NSTextField(labelWithString: "")
+
     
     private let shortcutsBox = NSBox()
     private let activationLabel = NSTextField(labelWithString: "Activation")
@@ -190,6 +206,25 @@ private class SettingsTabView: NSView {
         soundEffectsCheckbox.target = self
         soundEffectsCheckbox.action = #selector(soundEffectsChanged(_:))
         generalBox.contentView?.addSubview(soundEffectsCheckbox)
+        
+        maxHistoryLabel.font = .systemFont(ofSize: 13)
+        maxHistoryLabel.textColor = .labelColor
+        generalBox.contentView?.addSubview(maxHistoryLabel)
+        
+        // Slider: logarithmic from 1,000 to 100,000
+        maxHistorySlider.minValue = 0
+        maxHistorySlider.maxValue = 1
+        maxHistorySlider.isContinuous = true
+        maxHistorySlider.target = self
+        maxHistorySlider.action = #selector(maxHistorySliderChanged(_:))
+        generalBox.contentView?.addSubview(maxHistorySlider)
+        
+        maxHistoryValueLabel.font = .systemFont(ofSize: 11)
+        maxHistoryValueLabel.textColor = .secondaryLabelColor
+        maxHistoryValueLabel.alignment = .right
+        generalBox.contentView?.addSubview(maxHistoryValueLabel)
+        
+
         
         // Shortcuts box
         shortcutsBox.title = "Shortcuts"
@@ -276,6 +311,12 @@ private class SettingsTabView: NSView {
         dockIconCheckbox.state = UserDefaults.standard.bool(forKey: "showDockIcon") ? .on : .off
         soundEffectsCheckbox.state = SoundPlayer.shared.isEnabled ? .on : .off
         
+        let maxItems = HistoryStore.shared.maxItems
+        maxHistorySlider.doubleValue = Self.itemsToSlider(maxItems)
+        updateMaxHistoryLabel(maxItems)
+        
+
+        
         let modeRaw = UserDefaults.standard.integer(forKey: "activationMode")
         activationPicker.selectItem(at: modeRaw)
         updateHoldRowLabel()
@@ -320,12 +361,23 @@ private class SettingsTabView: NSView {
         y -= 28
         
         // General box
-        generalBox.frame = NSRect(x: pad, y: y - 74, width: boxW, height: 74)
+        let generalH: CGFloat = 112
+        generalBox.frame = NSRect(x: pad, y: y - generalH, width: boxW, height: generalH)
         if let cv = generalBox.contentView {
-            soundEffectsCheckbox.frame = NSRect(x: 12, y: cv.bounds.height - 28, width: 200, height: 20)
-            dockIconCheckbox.frame = NSRect(x: 12, y: cv.bounds.height - 50, width: 200, height: 20)
+            let inset: CGFloat = 12
+            let sliderRight = cv.bounds.width - inset
+            
+            soundEffectsCheckbox.frame = NSRect(x: inset, y: cv.bounds.height - 28, width: 200, height: 20)
+            dockIconCheckbox.frame = NSRect(x: inset, y: cv.bounds.height - 50, width: 200, height: 20)
+            
+            let historyRowY = cv.bounds.height - 72
+            maxHistoryLabel.frame = NSRect(x: inset, y: historyRowY, width: 120, height: 18)
+            maxHistoryValueLabel.sizeToFit()
+            let valueLabelW = max(130, maxHistoryValueLabel.frame.width)
+            maxHistoryValueLabel.frame = NSRect(x: sliderRight - valueLabelW, y: historyRowY, width: valueLabelW, height: 18)
+            maxHistorySlider.frame = NSRect(x: inset, y: historyRowY - 22, width: sliderRight - inset, height: 21)
         }
-        y -= 86
+        y -= generalH + 12
         
         // Shortcuts box
         let rowH: CGFloat = 40
@@ -364,6 +416,44 @@ private class SettingsTabView: NSView {
     
     @objc private func soundEffectsChanged(_ sender: NSButton) {
         SoundPlayer.shared.isEnabled = sender.state == .on
+    }
+    
+    @objc private func maxHistorySliderChanged(_ sender: NSSlider) {
+        let items = Self.sliderToItems(sender.doubleValue)
+        updateMaxHistoryLabel(items)
+        UserDefaults.standard.set(items, forKey: HistoryStore.maxItemsKey)
+    }
+    
+    private func updateMaxHistoryLabel(_ items: Int) {
+        let sizeBytes = items * HistoryStore.estimatedBytesPerEntry
+        let sizeStr: String
+        if sizeBytes < 1_000_000 {
+            sizeStr = "\(sizeBytes / 1_000) KB"
+        } else {
+            sizeStr = String(format: "%.0f MB", Double(sizeBytes) / 1_000_000)
+        }
+        let itemsStr = items >= 1000 ? "\(items / 1000)K" : "\(items)"
+        maxHistoryValueLabel.stringValue = "\(itemsStr) items · ~\(sizeStr)"
+    }
+    
+    // Logarithmic mapping: slider 0..1 → 1,000..100,000
+    private static let sliderMin = log(1_000.0)
+    private static let sliderMax = log(100_000.0)
+    
+    private static func sliderToItems(_ t: Double) -> Int {
+        let clamped = min(1, max(0, t))
+        let raw = exp(sliderMin + clamped * (sliderMax - sliderMin))
+        // Snap to nice round numbers
+        let rounded: Int
+        if raw < 2_000 { rounded = Int((raw / 500).rounded()) * 500 }
+        else if raw < 10_000 { rounded = Int((raw / 1_000).rounded()) * 1_000 }
+        else { rounded = Int((raw / 5_000).rounded()) * 5_000 }
+        return max(1_000, min(100_000, rounded))
+    }
+    
+    private static func itemsToSlider(_ items: Int) -> Double {
+        let clamped = Double(max(1_000, min(100_000, items)))
+        return (log(clamped) - sliderMin) / (sliderMax - sliderMin)
     }
     
     @objc private func dockIconChanged(_ sender: NSButton) {
@@ -754,6 +844,151 @@ private class SettingsModelCardView: NSView {
     }
 }
 
+// MARK: - Microphone Tab
+
+private class MicrophoneTabView: NSView {
+    
+    private let titleLabel = NSTextField(labelWithString: "Microphone")
+    private let subtitleLabel = NSTextField(labelWithString: "Choose which microphone Hearsay uses for recording.")
+    
+    private let micBox = NSBox()
+    private let micLabel = NSTextField(labelWithString: "Input Device")
+    private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let activeLabel = NSTextField(labelWithString: "")
+    
+    private var devices: [MicrophoneManager.AudioDevice] = []
+    
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        setupNotifications()
+        refresh()
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    private func setupUI() {
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+        
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        addSubview(subtitleLabel)
+        
+        // Microphone selection box
+        micBox.title = "Input Device"
+        micBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(micBox)
+        
+        micLabel.font = .systemFont(ofSize: 13)
+        micLabel.textColor = .labelColor
+        micBox.contentView?.addSubview(micLabel)
+        
+        micPopup.controlSize = .regular
+        micPopup.font = .systemFont(ofSize: 13)
+        micPopup.target = self
+        micPopup.action = #selector(micSelected(_:))
+        micBox.contentView?.addSubview(micPopup)
+        
+        activeLabel.font = .systemFont(ofSize: 11)
+        activeLabel.textColor = .secondaryLabelColor
+        activeLabel.alignment = .left
+        micBox.contentView?.addSubview(activeLabel)
+    }
+    
+    private func setupNotifications() {
+        MicrophoneManager.shared.onDeviceListChanged = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.refresh()
+            }
+        }
+        MicrophoneManager.shared.onActiveDeviceChanged = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.updateActiveLabel()
+            }
+        }
+    }
+    
+    func refresh() {
+        devices = MicrophoneManager.shared.availableDevices
+        
+        // Rebuild popup menu
+        micPopup.removeAllItems()
+        
+        // "None" = follow system default
+        micPopup.addItem(withTitle: "None (System Default)")
+        micPopup.menu?.addItem(.separator())
+        
+        for device in devices {
+            let title = device.isBuiltIn ? "\(device.name)" : "\(device.name)"
+            micPopup.addItem(withTitle: title)
+        }
+        
+        // Select the current preferred device
+        let selectedUID = MicrophoneManager.shared.selectedDeviceUID
+        if let uid = selectedUID, let idx = devices.firstIndex(where: { $0.uid == uid }) {
+            micPopup.selectItem(at: idx + 2)  // +2 for "None" + separator
+        } else {
+            micPopup.selectItem(at: 0)  // "None"
+        }
+        
+        updateActiveLabel()
+    }
+    
+    private func updateActiveLabel() {
+        if let active = MicrophoneManager.shared.activeDevice {
+            activeLabel.stringValue = "Currently using: \(active.name)"
+            activeLabel.textColor = .secondaryLabelColor
+        } else {
+            activeLabel.stringValue = "No microphone available"
+            activeLabel.textColor = .systemRed
+        }
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        let pad: CGFloat = 20
+        var y = bounds.height - 22
+        
+        titleLabel.frame = NSRect(x: pad, y: y - 24, width: bounds.width - pad * 2, height: 24)
+        y -= 32
+        subtitleLabel.frame = NSRect(x: pad, y: y - 18, width: bounds.width - pad * 2, height: 18)
+        y -= 36
+        
+        // Mic box
+        let boxH: CGFloat = 110
+        micBox.frame = NSRect(x: pad, y: y - boxH, width: bounds.width - pad * 2, height: boxH)
+        
+        if let cv = micBox.contentView {
+            let inset: CGFloat = 12
+            let popupW: CGFloat = cv.bounds.width - inset * 2
+            
+            micLabel.frame = NSRect(x: inset, y: cv.bounds.height - 26, width: 200, height: 18)
+            micPopup.frame = NSRect(x: inset, y: cv.bounds.height - 56, width: popupW, height: 26)
+            activeLabel.frame = NSRect(x: inset, y: cv.bounds.height - 78, width: popupW, height: 16)
+        }
+    }
+    
+    @objc private func micSelected(_ sender: NSPopUpButton) {
+        let idx = sender.indexOfSelectedItem
+        
+        if idx == 0 {
+            // "None" — use system default
+            MicrophoneManager.shared.selectDevice(uid: nil)
+        } else {
+            // Account for separator at index 1
+            let deviceIdx = idx - 2
+            guard deviceIdx >= 0, deviceIdx < devices.count else { return }
+            MicrophoneManager.shared.selectDevice(uid: devices[deviceIdx].uid)
+        }
+        
+        updateActiveLabel()
+    }
+}
+
 // MARK: - Permissions Tab
 
 private class PermissionsTabView: NSView {
@@ -1047,7 +1282,7 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
     }
     
     func refresh() {
-        items = HistoryStore.shared.getRecent(50)
+        items = HistoryStore.shared.getRecent(100)
         tableView.reloadData()
         emptyLabel.isHidden = !items.isEmpty
         scrollView.isHidden = items.isEmpty

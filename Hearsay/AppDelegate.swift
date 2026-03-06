@@ -58,6 +58,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindowController: OnboardingWindowController?
     private var settingsWindowController: SettingsWindowController?
     
+    // MARK: - Dev Mode
+    
+    /// Dev mode is active when running from a build directory (i.e. not /Applications).
+    static var isDevMode: Bool {
+        let bundlePath = Bundle.main.bundlePath
+        return bundlePath.contains("/Build/Products/") || bundlePath.contains("/DerivedData/")
+    }
+    
     // MARK: - State
     
     private var isRecording = false
@@ -82,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
         setupRecordingUI()
         setupAudioRecorder()
+        setupMicrophoneManager()
         setupHotkeyMonitor()
         
         // Check if we need to show onboarding (permissions or model missing)
@@ -147,6 +156,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // TextInserter.insert(item.text)
         }
         
+        statusBar.onCheckForUpdates = { [weak self] in
+            self?.checkForUpdates()
+        }
+        
         statusBar.onQuit = {
             NSApp.terminate(nil)
         }
@@ -191,6 +204,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioRecorder.onError = { [weak self] message in
             self?.showError(message)
         }
+        
+        // Set initial microphone device from priority settings
+        updateRecorderDevice()
+    }
+    
+    private func setupMicrophoneManager() {
+        MicrophoneManager.shared.onActiveDeviceChanged = { [weak self] device in
+            guard let self = self else { return }
+            if let device = device {
+                logger.info("Active microphone changed to: \(device.name)")
+            } else {
+                logger.warning("No microphone available")
+            }
+            self.updateRecorderDevice()
+        }
+    }
+    
+    private func updateRecorderDevice() {
+        let device = MicrophoneManager.shared.activeDevice
+        audioRecorder.deviceUID = device?.uid
+        logger.info("Recorder device set to: \(device?.name ?? "system default")")
     }
     
     private func setupHotkeyMonitor() {
@@ -550,8 +584,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 TextInserter.insert(text)
                 SoundPlayer.shared.play(.paste)
                 
+                // In dev mode, preserve the audio recording
+                var savedAudioPath: String? = nil
+                if Self.isDevMode {
+                    savedAudioPath = self.preserveRecording(audioURL: audioURL)
+                }
+                
                 // Save to history (save raw text for cleaner history)
-                HistoryStore.shared.add(text: text, durationSeconds: audioDuration)
+                HistoryStore.shared.add(text: text, durationSeconds: audioDuration, audioFilePath: savedAudioPath)
                 
                 guard self.currentTranscriptionID == transcriptionID else {
                     logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
@@ -660,12 +700,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleIndicatorDismiss(after: delay)
     }
     
+    // MARK: - Dev Mode
+    
+    private func preserveRecording(audioURL: URL) -> String? {
+        let dir = Constants.recordingsDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let filename = "recording_\(formatter.string(from: Date())).wav"
+        let destURL = dir.appendingPathComponent(filename)
+        
+        do {
+            try FileManager.default.copyItem(at: audioURL, to: destURL)
+            logger.info("Dev mode: saved recording to \(destURL.path)")
+            return destURL.path
+        } catch {
+            logger.error("Dev mode: failed to save recording: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
     // MARK: - Error Handling
     
     private func showError(_ message: String) {
         recordingIndicator.setState(.error(message))
         recordingWindow.fadeIn()
         scheduleIndicatorDismiss(after: 2.0)
+    }
+    
+    // MARK: - Updates
+    
+    private func checkForUpdates() {
+        Task {
+            let result = await UpdateChecker.check()
+            await MainActor.run {
+                switch result {
+                case .updateAvailable(let info):
+                    let alert = NSAlert()
+                    alert.messageText = "Update Available"
+                    alert.informativeText = "Hearsay \(info.version) is available. You're currently on \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown").\n\n\(info.releaseNotes)"
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "View on GitHub")
+                    alert.addButton(withTitle: "Later")
+                    
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        NSWorkspace.shared.open(info.htmlURL)
+                    }
+                    
+                case .upToDate(let currentVersion):
+                    let alert = NSAlert()
+                    alert.messageText = "You're Up to Date"
+                    alert.informativeText = "Hearsay \(currentVersion) is the latest version."
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                    
+                case .error(let message):
+                    let alert = NSAlert()
+                    alert.messageText = "Update Check Failed"
+                    alert.informativeText = "Couldn't check for updates: \(message)"
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
+        }
     }
     
     // MARK: - Windows

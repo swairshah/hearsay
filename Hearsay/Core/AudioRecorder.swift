@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Accelerate
 
 /// Records audio from the microphone to a WAV file.
@@ -15,6 +16,9 @@ final class AudioRecorder {
     var onError: ((String) -> Void)?
     
     private(set) var state: State = .idle
+    
+    /// The device UID to use for recording. If nil, uses the system default.
+    var deviceUID: String?
     
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
@@ -102,9 +106,33 @@ final class AudioRecorder {
     }
     
     private func setupAudioEngine() throws {
+        // If a specific device is requested, set it as the system default input
+        // so AVAudioEngine uses it. This is the most reliable way to control
+        // which mic AVAudioEngine records from — setting the device on the
+        // engine's internal AudioUnit is fragile, especially with Bluetooth.
+        if let uid = deviceUID, let targetID = MicrophoneManager.shared.audioDeviceID(for: uid) {
+            let currentDefault = Self.getSystemDefaultInputDevice()
+            if currentDefault != targetID {
+                Self.setSystemDefaultInputDevice(targetID)
+                print("AudioRecorder: Set system default input to \(targetID) (was \(currentDefault ?? 0))")
+                // Small delay to let CoreAudio propagate the change
+                Thread.sleep(forTimeInterval: 0.05)
+            } else {
+                print("AudioRecorder: Preferred device \(targetID) is already the system default")
+            }
+        }
+        
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        
+        // Validate the format
+        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
+            throw NSError(domain: "AudioRecorder", code: 4,
+                         userInfo: [NSLocalizedDescriptionKey:
+                            "Invalid input format: \(inputFormat.channelCount)ch @ \(inputFormat.sampleRate)Hz"])
+        }
+        print("AudioRecorder: Input format: \(inputFormat.channelCount)ch @ \(inputFormat.sampleRate)Hz")
         
         // Target format: 16kHz mono for qwen_asr
         guard let targetFormat = AVAudioFormat(
@@ -116,9 +144,6 @@ final class AudioRecorder {
             throw NSError(domain: "AudioRecorder", code: 1, 
                          userInfo: [NSLocalizedDescriptionKey: "Failed to create target audio format"])
         }
-        
-        // Create converter if needed
-        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
         
         // Create output file
         let outputURL = Constants.tempAudioURL
@@ -139,14 +164,18 @@ final class AudioRecorder {
         )
         self.audioFile = audioFile
         
-        // Install tap on input
+        // Create the converter once (inputFormat → 16kHz mono)
+        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        let needsConversion = inputFormat.sampleRate != Constants.sampleRate || inputFormat.channelCount != 1
+        
+        // Install tap on input — pass nil for format so AVAudioEngine uses the
+        // node's native format, avoiding mismatches after device changes.
         let bufferSize: AVAudioFrameCount = 4096
         
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, time in
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, time in
             guard let self = self else { return }
             
-            // Convert to target format
-            if let converter = converter {
+            if needsConversion, let converter = converter {
                 let frameCount = AVAudioFrameCount(
                     Double(buffer.frameLength) * Constants.sampleRate / inputFormat.sampleRate
                 )
@@ -173,6 +202,41 @@ final class AudioRecorder {
         }
         
         self.audioEngine = engine
+    }
+    
+    // MARK: - System Default Input Device
+    
+    private static func getSystemDefaultInputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, 0, nil, &size, &deviceID
+        )
+        return status == noErr ? deviceID : nil
+    }
+    
+    private static func setSystemDefaultInputDevice(_ deviceID: AudioDeviceID) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var devID = deviceID
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, 0, nil,
+            UInt32(MemoryLayout<AudioDeviceID>.size),
+            &devID
+        )
+        if status != noErr {
+            print("AudioRecorder: Failed to set system default input device: \(status)")
+        }
     }
     
     private func updateLevel(from buffer: AVAudioPCMBuffer) {

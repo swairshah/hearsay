@@ -17,6 +17,7 @@ final class StatusBarController {
     var onShowSettings: (() -> Void)?
     var onShowPermissions: (() -> Void)?
     var onShowOnboarding: (() -> Void)?
+    var onCheckForUpdates: (() -> Void)?
     var onCopyHistoryItem: ((TranscriptionItem) -> Void)?
     var onQuit: (() -> Void)?
     
@@ -112,6 +113,12 @@ final class StatusBarController {
         helpItem.target = self
         helpItem.isEnabled = true
         menu.addItem(helpItem)
+        
+        // Check for Updates
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        updateItem.target = self
+        updateItem.isEnabled = true
+        menu.addItem(updateItem)
         
         menu.addItem(.separator())
         
@@ -220,6 +227,10 @@ final class StatusBarController {
     @objc private func copyHistoryItem(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? TranscriptionItem else { return }
         onCopyHistoryItem?(item)
+    }
+    
+    @objc private func checkForUpdates(_ sender: NSMenuItem) {
+        onCheckForUpdates?()
     }
     
     @objc private func showHelp(_ sender: NSMenuItem) {

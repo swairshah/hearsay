@@ -1,0 +1,357 @@
+{
+  "cloud_model": "deepseek/deepseek-chat",
+  "local_model": "mlx-community/Qwen3-0.6B-4bit",
+  "judge_model": "deepseek/deepseek-chat",
+  "results": [
+    {
+      "name": "hist_000",
+      "raw": "Okay, I want to add a feature here, where ah so so if you need to first check the heartbeat system and heartbeat skill or or like extension or plugin for PyDev, ah like the PyCodingAgent. What I want to do is that I want to be able to optionally say in the chat that now ah please monitor or like please help me please give me give me ah like incremental feedback or something like that. I don't know whether I want to have like a shortcut for this to like live or something shortcut. But if it is on, then every few I don't know like every x number of keystrokes or every ah every few minutes or something. The the agent would check the status. It would have access to obviously the the text that we have written and also its current current suggestion that's showing. And in that case, it would update ah the suggestions or something like that, like with with the ah like in reaction to the changes that I've made since the last last suggestion. In case I have not made any changes, in case there is nothing to do, it's fine. But otherwise, it should do that. And I want to figure out the nice UI for that, like some kind of not really notification like a softer suggestion or something like that. So I want to work like almost actively with the agent. You see what I mean.",
+      "cloud": "Okay, I want to add a feature here where if you need to first check the heartbeat system and heartbeat skill or extension or plugin for PyDev, the PyCodingAgent. What I want to do is I want to be able to optionally say in the chat that please monitor or please help me give me incremental feedback. I don't know whether I want to have a shortcut for this to live or something. But if it is on, then every few keystrokes or every few minutes, the agent would check the status. It would have access to the text that we have written and also its current suggestion. In that case, it would update the suggestions in reaction to the changes I've made since the last suggestion. If I have not made any changes, if there is nothing to do, it's fine. Otherwise, it should do that. I want to figure out a nice UI for that, some kind of softer suggestion. I want to work almost actively with the agent.",
+      "local": "Okay, I want to add a feature here, where if you need to first check the heartbeat system and heartbeat skill or or like extension or plugin for PyDev, ah like the PyCodingAgent. What I want to do is that I want to be able to optionally say in the chat that now ah please monitor or like please help me please give me give me ah like incremental feedback or something like that. I don't know whether I want to have like a shortcut for this to like live or something shortcut. But if it is on, then every few I don't know like every x number of keystrokes or every ah every few minutes or something. The the agent would check the status. It would have access to obviously the the text that we have written and also its current current suggestion that's showing. And in that case, it would update ah the suggestions or something like that, like with with the ah like in reaction to the changes that I've made since the last last suggestion. In case I have not made any changes, in case there is nothing to do, it's fine. But otherwise, it should do that. And I want to figure out the nice UI for that, like some kind of not really notification like a softer suggestion or something like that. So I want to work like almost actively with the agent.",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 8,
+        "faithfulness": 9,
+        "fluency": 6,
+        "notes": "The model output retains most of the original content but includes unnecessary repetitions and filler words (\"ah\", \"like\", \"or or\"), which reduces fluency. It is faithful to the speaker's words but could be more concise. Accuracy is decent, but some corrections could improve readability.",
+        "total": 30
+      }
+    },
+    {
+      "name": "hist_001",
+      "raw": "So we have like different people's voices, right? Ah, so so I'm saying something and then, someone else is saying something. If we have if I am saying something and then all of a sudden in the same sentence, the if the voice changes a certain way, then it feels like someone else is saying something or the voice is different. I don't know how to quantify that. So let's say if I'm saying something and then I have a cough or something or I'm saying something and I I try to change my voice or someone else says something. How does how does this thing get detected, ah from the point of view of ah, from the point of view of like human brain or like a signal processing point of view. The whole point is that basically what I want to do is that is there a way from first principles, we can construct ah synthetic voices that sound natural. The the reason I'm operating from the other way is that other way sounds simpler and that will give us some learnings. Ah, there could be some research that is already being done, ah that's already being done in this area, but I I'm I'm trying to figure out how to approach this thing.",
+      "cloud": "So we have different people's voices, right? I'm saying something and then someone else is saying something. If I am saying something and then all of a sudden in the same sentence, the voice changes a certain way, it feels like someone else is saying something or the voice is different. I don't know how to quantify that. Let's say if I'm saying something and then I have a cough or I try to change my voice or someone else says something. How does this get detected from the point of view of the human brain or a signal processing point of view? The whole point is that basically what I want to do is find a way from first principles to construct synthetic voices that sound natural. The reason I'm operating from the other way is that it sounds simpler and will give us some learnings. There could be some research that is already being done in this area, but I'm trying to figure out how to approach this.",
+      "local": "So we have different people's voices, right? Ah, so I'm saying something and then someone else is saying something. If we have if I am saying something and then all of a sudden in the same sentence, the if the voice changes a certain way, then it feels like someone else is saying something or the voice is different. I don't know how to quantify that. So let's say if I'm saying something and then I try to change my voice or someone else says something. How does this thing get detected, ah from the point of view of like human brain or like a signal processing point of view. The whole point is that basically what I want to do is that is there a way from first principles, we can construct synthetic voices that sound natural. The the reason I'm operating from the other way is that other way sounds simpler and that will give us some learnings. Ah, there could be some research that is already being done, ah that's already being done in this area, but I I'm trying to figure out how to approach this thing.",
+      "scores": {
+        "accuracy": 8,
+        "completeness": 7,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model output retains most of the original meaning and structure but includes some redundant phrases and filler words (\"ah\", \"the the\", \"that is\"). It misses removing some repetitions and false starts, affecting completeness and fluency. Faithfulness is high as it preserves the speaker's intent without significant rephrasing.",
+        "total": 31
+      }
+    },
+    {
+      "name": "hist_002",
+      "raw": "Okay, so this is also it doesn't seem like it's doing like a Hindi accent. I think it's it's coming from the previous training run. So the Hindi training is sort of failing. Ah, do you think we need to run it for longer time or something? Also, can you please check whether the dataset that we are using does it have Hindi ah like does it have ah Romanic Roman ah alphabet or is it have Devanagari alphabet? And if if it's ah Devanagari, then do you think we need to train for a longer amount of time?",
+      "cloud": "Okay, so this is also it doesn't seem like it's doing a Hindi accent. I think it's coming from the previous training run. The Hindi training is sort of failing. Do you think we need to run it for longer or something? Also, can you please check whether the dataset we are using has Hindi with Roman alphabet or Devanagari alphabet? If it's Devanagari, then do you think we need to train for a longer amount of time?",
+      "local": "Okay, so this is also it doesn't seem like it's doing like a Hindi accent. I think it's it's coming from the previous training run. So the Hindi training is sort of failing. Ah, do you think we need to run it for longer time or something? Also, can you please check whether the dataset that we are using does it have Hindi, like does it have ah Romanic, Roman ah alphabet or is it have Devanagari alphabet? And if if it's ah Devanagari, then do you think we need to train for a longer amount of time?",
+      "scores": {
+        "accuracy": 6,
+        "completeness": 7,
+        "faithfulness": 9,
+        "fluency": 6,
+        "notes": "The model output retains many of the filler words and repetitions from the raw transcript, which affects completeness and fluency. It is mostly faithful to the original speaker's words but lacks some corrections in punctuation and phrasing that would improve accuracy and fluency.",
+        "total": 28
+      }
+    },
+    {
+      "name": "hist_003",
+      "raw": "So first add like a few notes in the todo of what we discovered, like this, the the fact that if we unfreeze the the flow net, it causes some sort of bottle collapse. Probably, what is the probable reason that we found, and the to do experiments to make it ah make it like let's say adapt to certain kinds of, um certain kind of accents, certain kind of languages or fixed mistakes. What are these these experiments we want to try? So you said unfreeze the text conditioner, unfreeze speaker project weight, train on more data, target rate loss, etc. Just like make minor changes to the readme, but add these things.",
+      "cloud": "So first add a few notes in the todo of what we discovered. The fact that if we unfreeze the flownet, it causes some sort of bottleneck collapse. Probably, what is the probable reason that we found? And the todo experiments to make it adapt to certain kinds of accents, certain kinds of languages, or fix mistakes. What are these experiments we want to try? You said unfreeze the text conditioner, unfreeze speaker project weight, train on more data, target rate loss, etc. Just make minor changes to the readme, but add these things.",
+      "local": "So first add like a few notes in the todo of what we discovered, like this: the fact that if we unfreeze the the flow net, it causes some sort of bottle collapse. Probably, what is the probable reason that we found, and the to do experiments to make it like let's say adapt to certain kinds of, um certain kind of accents, certain kind of languages or fixed mistakes. What are these these experiments we want to try? So you said unfreeze the text conditioner, unfreeze speaker project weight, train on more data, target rate loss, etc. Just like make minor changes to the readme, but add these things.",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 8,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model output retains most of the raw transcript's content, including filler words and repetitions, which affects fluency. It misses some corrections like \"flownet\" instead of \"flow net\" and \"bottleneck collapse\" instead of \"bottle collapse,\" impacting accuracy. Faithfulness is high as it preserves the speaker's words without rephrasing or adding. Completeness is good as it captures most of the content but misses minor refinements.",
+        "total": 31
+      }
+    },
+    {
+      "name": "hist_004",
+      "raw": "Okay, now it seems better, but ah, like it's, it's not using the. It's like all of all the samples across the the zeroth ah step or the two hundred step, they're used. They're the same. They're like almost exactly the same. How do I hear sounds of from like the the sound that that is in the Alice database dataset?",
+      "cloud": "Okay, now it seems better, but it's not using the. It's like all of the samples across the zeroth step or the two hundred step, they're used. They're the same. They're almost exactly the same. How do I hear sounds from the sound that is in the Alice database dataset?",
+      "local": "Okay, now it seems better, but like it's not using the. It's like all of all the samples across the the zeroth ah step or the two hundred step, they're used. They're the same. They're like almost exactly the same. How do I hear sounds of from like the the sound that that is in the Alice database dataset?",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 6,
+        "faithfulness": 9,
+        "fluency": 6,
+        "notes": "The model output retains many filler words (\"ah\", \"like\", \"the the\") and repetitions, which reduces completeness and fluency. It is mostly faithful to the raw transcript but misses some corrections that improve clarity and accuracy.",
+        "total": 28
+      }
+    },
+    {
+      "name": "hist_005",
+      "raw": "I want to create a pipeline, to which will help us fine tune the the small model. So that it improves on on this task. Basically, our task is very simple. Our task is that oh. Whenever we transcribe something, we make some kind of mistake. We want to fix that mistake. We basically we want to sanitize. And also, if there is a prompt, the the transcription should react to the prompt, and that will be done by the language model. So we create this kind of data set where it would have, the instruction like almost like an SFT data set. I mean, we can also do the same thing for GRP. I'm not sure exactly, but some some kind of thing. Check this fine tune. See how that works. And in the just like the way we have a separate eval directory, we should have a separate fine tune directory. Have give me one script. We will test it on model, like the model cloud. And and we'll take it from there.",
+      "cloud": "I want to create a pipeline which will help us fine-tune the small model so that it improves on this task. Basically, our task is very simple. Our task is that whenever we transcribe something, we make some kind of mistake. We want to fix that mistake. We want to sanitize. Also, if there is a prompt, the transcription should react to the prompt, and that will be done by the language model. So we create this kind of dataset where it would have the instruction almost like an SFT dataset. I mean, we can also do the same thing for GRP. I'm not sure exactly, but some kind of thing. Check this fine-tune. See how that works. And just like the way we have a separate eval directory, we should have a separate fine-tune directory. Give me one script. We will test it on model like the model cloud and we'll take it from there.",
+      "local": "I want to create a pipeline, to which will help us fine tune the small model. So that it improves on this task. Basically, our task is very simple. Our task is that oh. Whenever we transcribe something, we make some kind of mistake. We want to fix that mistake. We basically want to sanitize. And also, if there is a prompt, the the transcription should react to the prompt, and that will be done by the language model. So we create this kind of data set where it would have, the instruction like almost like an SFT data set. I mean, we can also do the same thing for GRP. I'm not sure exactly, but some some kind of thing. Check this fine tune. See how that works. And in the just like the way we have a separate eval directory, we should have a separate fine tune directory. Have give me one script. We will test it on model, like the model cloud. And and we'll take it from there.",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 8,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model output retains most of the original content but misses some corrections like removing \"the the\" and \"oh.\" It also keeps some awkward phrasing and repetitions, affecting fluency and accuracy. Faithfulness is high as it closely follows the raw transcript without significant rephrasing.",
+        "total": 31
+      }
+    },
+    {
+      "name": "hist_006",
+      "raw": "So basically, give me an option of setting this thing by by the size of history, and make it range from, ah, let's say like thousand items, so three hundred KB, to ah, hundred thousand items, so three hundred MB. Indicate that in the UI, and I'll give me a slider where I can change it. And in the slider, show an estimate of the number of entries and show an estimate of the size. And also change the change the backend code where you would adjust the the reading so that the reading doesn't feel slow. And if you want, you can also change the storage. Like basically, create different files. Each file has like thousand entries or something like that.",
+      "cloud": "Give me an option of setting this thing by the size of history, and make it range from one thousand items (three hundred KB) to one hundred thousand items (three hundred MB). Indicate that in the UI, and give me a slider where I can change it. In the slider, show an estimate of the number of entries and an estimate of the size. Also change the backend code where you would adjust the reading so that the reading doesn't feel slow. If you want, you can also change the storage. Create different files. Each file has one thousand entries or something like that.",
+      "local": "So basically, give me an option of setting this thing by the size of history, and make it range from, let's say, thousand items, so three hundred KB, to, let's say, hundred thousand items, so three hundred MB. Indicate that in the UI, and I'll give me a slider where I can change it. And in the slider, show an estimate of the number of entries and show an estimate of the size. And also change the backend code where you would adjust the reading so that the reading doesn't feel slow. And if you want, you can also change the storage. Like basically, create different files. Each file has like thousand entries or something like that.",
+      "scores": {
+        "accuracy": 8,
+        "completeness": 9,
+        "faithfulness": 10,
+        "fluency": 8,
+        "notes": "The model output is very close to the reference, maintaining most of the factual corrections (accuracy). It captures all the key points (completeness) and stays true to the original speaker's words (faithfulness). The fluency is slightly lower due to minor repetitions (\"let's say\") and informal phrasing (\"like basically\"), but it remains natural and readable.",
+        "total": 35
+      }
+    },
+    {
+      "name": "hist_007",
+      "raw": "Would have instructed to say, oh, go to this session, go to that session. We need to have some kind of, like I I guess it can because it's it's like an AI session and an intelligent agent. I can just tell it, ah, the session, the the agent that is doing XYZ, just just go tell it this something like that, right.",
+      "cloud": "Would have instructed to say, go to this session, go to that session. We need to have some kind of, I guess it can because it's like an AI session and an intelligent agent. I can just tell it, the session, the agent that is doing XYZ, just go tell it something like that, right.",
+      "local": "Would have instructed to say, oh, go to this session, go to that session. We need to have some kind of, like I I guess it can because it's it's like an AI session and an intelligent agent. I can just tell it, ah, the session, the the agent that is doing XYZ, just go tell it this something like that, right.",
+      "scores": {
+        "accuracy": 6,
+        "completeness": 8,
+        "faithfulness": 10,
+        "fluency": 7,
+        "notes": "The model output retains many of the filler words and repetitions from the raw transcript, which affects accuracy and fluency. It is faithful to the original speaker's words but lacks some refinement seen in the reference. Completeness is decent as it captures most of the content but misses some minor corrections.",
+        "total": 31
+      }
+    },
+    {
+      "name": "hist_008",
+      "raw": "You should manually check the the audio files that we generated during the the hundred two hundred step. It it looks very very strange. It is like it it it completely loses the voice. There is some weird bug going on.",
+      "cloud": "You should manually check the audio files that we generated during the hundred to two hundred step. It looks very strange. It is like it completely loses the voice. There is some weird bug going on.",
+      "local": "You should manually check the audio files that we generated during the hundred two hundred step. It looks very very strange. It is like it it it completely loses the voice. There is some weird bug going on.",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 6,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model_output corrected some repetitions (\"the the\" to \"the\") but missed others (\"very very\" and \"it it it\"). It also missed the correction from \"the hundred two hundred step\" to \"the hundred to two hundred step\". The output is mostly faithful to the original but lacks some fluency due to remaining repetitions.",
+        "total": 29
+      }
+    },
+    {
+      "name": "hist_009",
+      "raw": "I want a macOS app logo where there is a bird and a pie shape is made purely with two tails or like the feather of it. It should it should not like the pie should like blend into the into the body of the bird like it should be like a natural not not weird looking pie. If you want, you can use the branch slightly cleverly to have like the head of the pie with the branch, but otherwise feathers should make the legs of the pie.",
+      "cloud": "I want a macOS app logo where there is a bird and a pie shape is made purely with two tails or the feather of it. The pie should blend into the body of the bird. It should be natural, not weird-looking. If you want, you can use the branch slightly cleverly to have the head of the pie with the branch, but otherwise feathers should make the legs of the pie.",
+      "local": "I want a macOS app logo where there is a bird and a pie shape is made purely with two tails or like the feather of it. It should not like the pie should like blend into the into the body of the bird like it should be like a natural not not weird looking pie. If you want, you can use the branch slightly cleverly to have like the head of the pie with the branch, but otherwise feathers should make the legs of the pie.",
+      "scores": {
+        "accuracy": 5,
+        "completeness": 6,
+        "faithfulness": 8,
+        "fluency": 4,
+        "notes": "The model_output closely matches the raw_transcript, including many filler words and repetitions, which affects fluency and completeness. It is faithful to the original but lacks the refinement seen in the reference. Accuracy is moderate as it captures the main ideas but with less precision.",
+        "total": 23
+      }
+    },
+    {
+      "name": "hist_010",
+      "raw": "Okay, then see which how can we test ah Gemma three N with audio. Like just look up what what are the options. You said the LM Studio doesn't work. You said the the Llama CPP doesn't work. Then what does work?",
+      "cloud": "Okay, then see how we can test Gemma 3N with audio. Just look up what the options are. You said LM Studio doesn't work. You said Llama CPP doesn't work. Then what does work?",
+      "local": "Okay, then see which how can we test Ah Gemma three N with audio. Like just look up what what are the options. You said the LM Studio doesn't work. You said the the Llama CPP doesn't work. Then what does work?",
+      "scores": {
+        "accuracy": 6,
+        "completeness": 8,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model output retains most of the raw transcript's content, including filler words and repetitions (\"which how,\" \"what what,\" \"the the\"), which affects fluency and completeness. It fails to correct \"Ah Gemma three N\" to \"Gemma 3N,\" impacting accuracy. Faithfulness is high as it preserves the speaker's words without rephrasing.",
+        "total": 30
+      }
+    },
+    {
+      "name": "hist_011",
+      "raw": "I want you to investigate an ability of adding a very small language model, maybe one zero point six billion or zero point eight billion parameter model, as a corrective step in the transcription. So once we transcribe something, we would pass it through the language model to have it sort of sanitize the text, and this will also allow us to give like prompts to adjust like certain words or certain characteristics of the transcription model. Can you first look what models are good candidate for that, and two whether there exists like a C or Rust binary that we can directly use for inference. Don't don't like integrate into the into the app. Just tell me how this whole thing works, and we are going to like I'll then investigate how how well the model works and see whether we want to integrate it.",
+      "cloud": "I want you to investigate the ability of adding a very small language model, maybe a 0.6 billion or 0.8 billion parameter model, as a corrective step in the transcription. Once we transcribe something, we would pass it through the language model to have it sanitize the text. This will also allow us to give prompts to adjust certain words or characteristics of the transcription model. Can you first look at what models are good candidates for that, and second, whether there exists a C or Rust binary that we can directly use for inference. Don't integrate it into the app. Just tell me how this whole thing works, and I'll then investigate how well the model works and see whether we want to integrate it.",
+      "local": "I want you to investigate an ability of adding a very small language model, maybe one billion or eight billion parameter model, as a corrective step in the transcription. So once we transcribe something, we would pass it through the language model to have it sort of sanitize the text, and this will also allow us to give like prompts to adjust like certain words or certain characteristics of the transcription model. Can you first look what models are good candidate for that, and two whether there exists like a C or Rust binary that we can directly use for inference. Don't don't like integrate into the into the app. Just tell me how this whole thing works, and we are going to like I'll then investigate how how well the model works and see whether we want to integrate it.",
+      "scores": {
+        "accuracy": 6,
+        "completeness": 7,
+        "faithfulness": 8,
+        "fluency": 6,
+        "notes": "The model output retains many of the original errors and filler words from the raw transcript, such as \"like\" and \"don't don't.\" It also incorrectly changes \"0.6 billion or 0.8 billion\" to \"one billion or eight billion,\" which is factually inaccurate. The output is faithful to the speaker's words but lacks fluency and completeness due to the retained errors and filler words.",
+        "total": 27
+      }
+    },
+    {
+      "name": "hist_012",
+      "raw": "How the fuck is it making up? Has the same color in the feathers in like the two tail tail part of feathers as the branch? They are different, right? The branch seems blue, and the tail tail of the feather is still yellow. I want you to color the tail of the tail of the the feathers as same as the branch.",
+      "cloud": "How the fuck is it making up? Has the same color in the feathers in the two-tail part of feathers as the branch? They are different, right? The branch seems blue, and the tail of the feather is still yellow. I want you to color the tail of the feathers the same as the branch.",
+      "local": "How is it making up? Has the same color in the feathers in like the two tail tail part of feathers as the branch? They are different, right? The branch seems blue, and the tail tail of the feather is still yellow. I want you to color the tail of the tail of the the feathers as same as the branch.",
+      "scores": {
+        "accuracy": 6,
+        "completeness": 7,
+        "faithfulness": 8,
+        "fluency": 5,
+        "notes": "The model output retains most of the original meaning but fails to fully correct the repetition (\"tail tail\") and the awkward phrasing (\"the the feathers\"). It also misses the opportunity to improve the fluency by removing the filler word \"like.\" The faithfulness is high as it doesn't add or rephrase significantly.",
+        "total": 26
+      }
+    },
+    {
+      "name": "hist_013",
+      "raw": "You idiot! Why is there a phone there? I just told you to use color scheme from that. Ah, okay. So I do like the the second one, but what is this weird, lob in the middle? I just need you to indicate pi symbol where the feathers. Use the second one, but remove that weird weird thingy in the middle.",
+      "cloud": "You idiot! Why is there a phone there? I just told you to use the color scheme from that. Okay. So I do like the second one, but what is this weird blob in the middle? I just need you to indicate the pi symbol where the feathers are. Use the second one, but remove that weird thingy in the middle.",
+      "local": "You idiot! Why is there a phone there? I just told you to use color scheme from that. Ah, okay. So I do like the second one, but what is this weird, lob in the middle? I just need you to indicate pi symbol where the feathers. Use the second one, but remove that weird weird thingy in the middle.",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 8,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model output is mostly accurate but misses some corrections like \"the color scheme\" and \"the pi symbol where the feathers are\". It retains most of the original content faithfully but has minor fluency issues with repeated words and odd phrasing like \"weird, lob\".",
+        "total": 31
+      }
+    },
+    {
+      "name": "hist_014",
+      "raw": "In case I wanted to adjust how it would react, for example, I know that it sometimes makes mistakes. For example, when when I put something in backwards, it says backwards backwards, and if I don't want it to do that, etc. How would I do that? So that is one question. Like I want like a continuous improving pipe pipeline. So if someone reports an issue that it does this or does that, I should be able to create some examples and fine tune my model or either add data to the prompt. The model doesn't make that mistake. I want to figure that part out.",
+      "cloud": "In case I wanted to adjust how it would react, for example, I know that it sometimes makes mistakes. When I put something in backwards, it says backwards backwards, and if I don't want it to do that, how would I do that? That is one question. I want a continuous improving pipeline. If someone reports an issue that it does this or does that, I should be able to create some examples and fine tune my model or add data to the prompt. The model doesn't make that mistake. I want to figure that part out.",
+      "local": "In case I wanted to adjust how it would react, for example, I know that it sometimes makes mistakes. For example, when I put something in backwards, it says backwards backwards, and if I don't want it to do that, etc. How would I do that? So that is one question. Like I want like a continuous improving pipe pipeline. So if someone reports an issue that it does this or does that, I should be able to create some examples and fine tune my model or either add data to the prompt. The model doesn't make that mistake. I want to figure that part out.",
+      "scores": {
+        "accuracy": 10,
+        "completeness": 10,
+        "faithfulness": 10,
+        "fluency": 8,
+        "notes": "The model output is highly accurate, complete, and faithful to the raw transcript, matching the reference closely. However, the fluency score is slightly lower due to minor repetitions and filler words like \"like\" and \"so,\" which could be streamlined for better readability.",
+        "total": 38
+      }
+    },
+    {
+      "name": "hist_015",
+      "raw": "Wait. Do we need to actually launch it? Can we not just do like Control Tab and first change focus to it, and then inside Emacs maybe we execute the the command or something to go to a specific tab or something? I I don't know. Like I'm I'm just bit polling here.",
+      "cloud": "Wait. Do we need to actually launch it? Can we not just do Control Tab and first change focus to it, and then inside Emacs maybe we execute the command or something to go to a specific tab? I don't know. I'm just brainstorming here.",
+      "local": "Wait. Do we need to actually launch it? Can we not just do like Control Tab and first change focus to it, and then inside Emacs maybe we execute the the command or something to go to a specific tab or something? I I don't know. Like I'm I'm just bit polling here.",
+      "scores": {
+        "accuracy": 5,
+        "completeness": 3,
+        "faithfulness": 10,
+        "fluency": 4,
+        "notes": "The model output is identical to the raw transcript, which means it did not correct any errors (e.g., \"the the\", \"I I\", \"I'm I'm\", \"bit polling\"). This results in low accuracy and completeness scores. Faithfulness is high because it preserved the speaker's words exactly. Fluency is low due to the repetition and unnatural phrasing.",
+        "total": 22
+      }
+    },
+    {
+      "name": "hist_016",
+      "raw": "Can you find a dataset which is in a different language? I want to see how fine tuning can support having a separate language. Basically, what we can do is that for I can have like a separate voice for for a new language that I want to add. Let's see if you can find, let's say Hindi dataset or or Gujarati dataset or something.",
+      "cloud": "Can you find a dataset which is in a different language? I want to see how fine-tuning can support having a separate language. Basically, what we can do is I can have a separate voice for a new language that I want to add. Let's see if you can find, let's say Hindi dataset or Gujarati dataset or something.",
+      "local": "Can you find a dataset which is in a different language? I want to see how fine tuning can support having a separate language. Basically, what we can do is that for I can have like a separate voice for for a new language that I want to add. Let's see if you can find, let's say Hindi dataset or Gujarati dataset or something.",
+      "scores": {
+        "accuracy": 8,
+        "completeness": 10,
+        "faithfulness": 10,
+        "fluency": 7,
+        "notes": "The model output is highly faithful and complete, matching the raw transcript exactly. However, it retains some minor inaccuracies like \"that for\" and \"like,\" which slightly reduce fluency and accuracy. The output reads naturally but could be smoother with minor corrections.",
+        "total": 35
+      }
+    },
+    {
+      "name": "hist_017",
+      "raw": "I want to understand how do they work, how do they differ from each other, what are the different techniques in training them, how much data does it take to train them, etc. Ah, you can do some Google search, etc. But I want ah totally in the that style so that I get the basics of training a model like that.",
+      "cloud": "I want to understand how they work, how they differ from each other, what the different techniques are in training them, how much data it takes to train them, etc. You can do some Google search, etc. But I want it in that style so that I get the basics of training a model like that.",
+      "local": "I want to understand how they work, how they differ from each other, what are the different techniques in training them, how much data does it take to train them, etc. Ah, you can do some Google search, etc. But I want totally in the that style so that I get the basics of training a model like that.",
+      "scores": {
+        "accuracy": 8,
+        "completeness": 7,
+        "faithfulness": 9,
+        "fluency": 7,
+        "notes": "The model output retains most of the factual corrections but misses some minor adjustments like removing \"ah\" and fixing \"totally in the that style\" to \"totally in that style.\" It is mostly faithful to the raw transcript but lacks some fluency improvements seen in the reference.",
+        "total": 31
+      }
+    },
+    {
+      "name": "hist_018",
+      "raw": "Ah, give me tell me one thing: How much would be hundred thousand ah line items be in in MBs or what?",
+      "cloud": "Give me, tell me one thing: How much would a hundred thousand line items be in MBs or what?",
+      "local": "Ah, give me tell me one thing: How much would be hundred thousand ah line items be in in MBs or what?",
+      "scores": {
+        "accuracy": 5,
+        "completeness": 6,
+        "faithfulness": 10,
+        "fluency": 5,
+        "notes": "The model output is faithful to the raw transcript but lacks corrections for filler words (\"ah\") and repetitions (\"in in\"). It also misses capitalization and punctuation improvements seen in the reference, affecting accuracy and fluency.",
+        "total": 26
+      }
+    },
+    {
+      "name": "hist_019",
+      "raw": "We want to take ah this hearsay app into a direction where I can optionally start letting it be a bit more agentic. So rather than just transcribing, it should also be able to do stuff in the computer. Ah, but just file a GitHub issue for that. So for example, I can say search windows or go to this window or whatever. I'll be able to figure out how to do that like slightly more cleverly, but create a GitHub issue for that, please.",
+      "cloud": "We want to take this hearsay app into a direction where I can optionally start letting it be a bit more agentic. Rather than just transcribing, it should also be able to do stuff in the computer. Just file a GitHub issue for that. For example, I can say search windows or go to this window or whatever. I'll be able to figure out how to do that slightly more cleverly, but create a GitHub issue for that, please.",
+      "local": "We want to take this hearsay app into a direction where I can optionally start letting it be a bit more agentic. So rather than just transcribing, it should also be able to do stuff in the computer. Ah, but just file a GitHub issue for that. So for example, I can say search windows or go to this window or whatever. I'll be able to figure out how to do that like slightly more cleverly, but create a GitHub issue for that, please.",
+      "scores": {
+        "accuracy": 9,
+        "completeness": 8,
+        "faithfulness": 10,
+        "fluency": 8,
+        "notes": "The model output is highly accurate, with only minor deviations like retaining \"Ah\" and \"like,\" which slightly affect fluency and completeness. It faithfully preserves the speaker's words without rephrasing or adding content. Fluency is good but could be improved by removing filler words.",
+        "total": 35
+      }
+    },
+    {
+      "name": "hist_020",
+      "raw": "Also, like I don't like the weights appearing. Like the UI looks a bit shit. Ah, can you check the screenshot that I attached in the GitHub issues and use like take inspiration from that.",
+      "cloud": "Also, I don't like the weights appearing. The UI looks a bit shit. Can you check the screenshot that I attached in the GitHub issues and take inspiration from that.",
+      "local": "Also, like I don't like the weights appearing. Like the UI looks a bit shit. Ah, can you check the screenshot that I attached in the GitHub issues and use like take inspiration from that.",
+      "scores": {
+        "accuracy": 10,
+        "completeness": 10,
+        "faithfulness": 10,
+        "fluency": 8,
+        "notes": "The model output matches the raw transcript exactly, so accuracy, completeness, and faithfulness are all high. However, the fluency score is slightly lower because the raw transcript contains filler words (\"like,\" \"ah\") and informal language (\"shit\"), which make it less polished compared to the reference.",
+        "total": 38
+      }
+    },
+    {
+      "name": "hist_021",
+      "raw": "What did you exactly fix? Can you explain? Because I I had to run like this: run dot dev and run dot ssh and TCC remove permission multiple times to get it right. Can you explain what are the exact fix that you did very very quickly?",
+      "cloud": "What did you exactly fix? Can you explain? Because I had to run this: run.dev and run.ssh and TCC remove permission multiple times to get it right. Can you explain what are the exact fixes that you did very quickly?",
+      "local": "What did you exactly fix? Can you explain? Because I had to run like this: run dot dev and run dot ssh and TCC remove permission multiple times to get it right. Can you explain what are the exact fix that you did very very quickly?",
+      "scores": {
+        "accuracy": 7,
+        "completeness": 8,
+        "faithfulness": 9,
+        "fluency": 8,
+        "notes": "The model output is mostly accurate but misses some corrections like \"fixes\" (should be plural) and retains \"very very\" which could be streamlined. It faithfully preserves the speaker's words but could improve fluency by removing redundant words.",
+        "total": 32
+      }
+    },
+    {
+      "name": "hist_022",
+      "raw": "So you are saying that we should basically have a conversion agent, like it's almost like a a magpie having its own pie session. That has the ability of like dispatching commands to different running pie sessions. Is that correct?",
+      "cloud": "So you are saying that we should basically have a conversion agent. It's almost like a magpie having its own pie session that has the ability of dispatching commands to different running pie sessions. Is that correct?",
+      "local": "So you're saying that we should basically have a conversion agent, like it's almost like a magpie having its own pie session. That has the ability to dispatch commands to different running pie sessions. Is that correct?",
+      "scores": {
+        "accuracy": 9,
+        "completeness": 10,
+        "faithfulness": 10,
+        "fluency": 10,
+        "notes": "The model output is highly accurate, correcting minor issues like \"you are\" to \"you're\" and \"of like\" to \"to.\" It maintains completeness by retaining all meaningful content without omissions. Faithfulness is preserved as the speaker's original intent and wording are respected. The output reads naturally and fluently.",
+        "total": 39
+      }
+    },
+    {
+      "name": "hist_023",
+      "raw": "Fixes like the the seven voices that this thing is using. I don't know whether I can use. I don't have a way of using the same voices to to issue fixes as well. You see what I'm saying.",
+      "cloud": "Fixes like the seven voices that this thing is using. I don't know whether I can use. I don't have a way of using the same voices to issue fixes as well. You see what I'm saying.",
+      "local": "Fixes like the seven voices that this thing is using. I don't know whether I can use. I don't have a way of using the same voices to issue fixes as well. You see what I'm saying.",
+      "scores": {
+        "accuracy": 10,
+        "completeness": 10,
+        "faithfulness": 10,
+        "fluency": 10,
+        "notes": "The model output perfectly matches the reference, correcting all filler words, repetitions, and maintaining the speaker's original words and meaning. The output reads naturally and fluently.",
+        "total": 40
+      }
+    },
+    {
+      "name": "hist_024",
+      "raw": "Okay, tell me one thing. If you wanted to adapt the model in such a way that let's say I'm speaking code rather than speaking each character by character, it should speak something slightly more. What do you call it? Slightly more realistic, like just speak out function name, miss the miss miss the bracket etc. If one wanted to do that. Does fine tuning like help here? Is fine tuning a good option here?",
+      "cloud": "Okay, tell me one thing. If you wanted to adapt the model in such a way that, let's say, I'm speaking code rather than speaking each character by character, it should speak something slightly more realistic, like just speak out the function name, miss the bracket, etc. If one wanted to do that, does fine-tuning help here? Is fine-tuning a good option here?",
+      "local": "Okay, let's see. The user wants to adapt the model so that instead of speaking each character by character, they just say the function name, miss the bracket, and that's it. They mention \"slightly more realistic\" and want to know if fine tuning helps here. The question is whether fine tuning is a good option.\n\nFirst, I need to correct any punctuation or capitalization errors. The original text has some missing spaces and capitalization issues. For example, \"If you wanted to adapt the model in such a way that let's say I'm speaking code rather than speaking each character by character, it should speak something slightly more. What do you call it? Slightly more realistic, like just speak out function name, miss the miss miss the bracket etc. If one wanted to do that. Does fine tuning like help here? Is fine tuning a good option here?\"\n\nI'll go through each part:\n\n1. \"If you wanted to adapt the model in such a way that let's say I'm speaking code rather than speaking each character by character, it should speak something slightly more.\" \u2013 \"slightly more\" is correct, but \"slightly more realistic\" is a bit redundant. Need to correct that.\n\n2. \"What do you call it?\" \u2013 \"What do you call it?\" is correct, but \"slightly more realistic\" is a bit redundant. Need to correct that.\n\n3. \"If one wanted to do that.\" \u2013 \"If one wanted to do that.\" is correct, but \"slightly more realistic\" is a bit redundant. Need to correct that.\n\n4. \"Does fine tuning like help here?\" \u2013 \"Does fine tuning like help here?\" is correct, but \"help here\" is a bit redundant. Need to correct that.\n\n5. \"Is fine tuning a good option here?\" \u2013 \"Is fine tuning a good option here?\" is correct, but \"here\" is a bit redundant. Need to correct that.\n\nSo the corrected transcript would be:\n\nOkay, let's see. If you wanted to adapt the model in such a way that let's say I'm speaking code rather than speaking each character by character, it should speak something slightly more. What do you call it? Slightly more realistic, like just speak out function name, miss the miss miss the bracket etc. If one wanted to do that. Does fine tuning like help here? Is fine tuning a good option here?",
+      "scores": {
+        "accuracy": 5,
+        "completeness": 6,
+        "faithfulness": 4,
+        "fluency": 5,
+        "notes": "The model_output introduces unnecessary corrections and redundancies, deviating from the reference. It also rephrases parts of the original transcript, reducing faithfulness. The fluency is affected by the repetitive and redundant explanations. The accuracy is moderate as some corrections are made, but many are incorrect or unnecessary.",
+        "total": 20
+      }
+    }
+  ]
+}

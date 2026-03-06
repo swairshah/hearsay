@@ -1,0 +1,1 @@
+we need to update the xcode gen project dot yaml to add the new swift ui view and make sure the c g event tap permissions are set correctly in the entitlements file also the av audio engine sample rate should be sixteen kilohertz

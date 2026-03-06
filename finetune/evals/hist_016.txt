@@ -1,0 +1,1 @@
+Can you find a dataset which is in a different language? I want to see how fine tuning can support having a separate language. Basically, what we can do is that for I can have like a separate voice for for a new language that I want to add. Let's see if you can find, let's say Hindi dataset or or Gujarati dataset or something.

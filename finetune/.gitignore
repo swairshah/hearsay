@@ -1,0 +1,6 @@
+outputs/
+data/train/
+__pycache__/
+*.pyc
+.venv/
+uv.lock

@@ -1,0 +1,1 @@
+What did you exactly fix? Can you explain? Because I I had to run like this: run dot dev and run dot ssh and TCC remove permission multiple times to get it right. Can you explain what are the exact fix that you did very very quickly?

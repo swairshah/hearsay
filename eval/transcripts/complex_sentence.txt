@@ -1,0 +1,1 @@
+the the main issue is that when you press right option and then um tap space to enter toggle mode the recording indicator doesnt show the correct state because the the state machine transition from idle to hold to toggle isnt updating the ui properly

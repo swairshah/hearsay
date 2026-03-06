@@ -1,0 +1,79 @@
+set shell := ["bash", "-uc"]
+
+# ─── Data Pipeline ───────────────────────────────────────────────────────────
+
+# Import real transcripts from Hearsay history
+import:
+    python3 import_history.py --count 25
+
+# Generate synthetic training data (from evals/ transcripts)
+generate:
+    uv run dataset/generate_data.py
+
+# Generate with more variations
+generate-more:
+    uv run dataset/generate_data.py --multiplier 5
+
+# Validate all data files against schema
+validate:
+    uv run dataset/validate_schema.py
+
+# Prepare data for training (apply chat template, split)
+prepare:
+    uv run dataset/prepare_data.py --seed 42
+
+# Full data pipeline: generate → validate → prepare
+data: generate validate prepare
+
+# ─── Evaluation ───────────────────────────────────────────────────────────────
+
+# Run evaluation (cloud vs local model, with LLM-as-judge)
+eval:
+    uv run eval.py -o results.json
+
+# Quick eval (side-by-side only, no judge scoring)
+eval-quick:
+    uv run eval.py --no-judge
+
+# Eval a specific local model
+eval-model model:
+    uv run eval.py --local-model {{model}} -o results.json
+
+# Eval the fine-tuned model (after export)
+eval-finetuned:
+    uv run eval.py --local-model outputs/mlx-4bit -o results_finetuned.json
+
+# ─── Training (Modal) ────────────────────────────────────────────────────────
+
+# Preview training config (dry run)
+train-dry:
+    modal run train_modal.py --dry-run
+
+# Launch training on Modal
+train:
+    modal run train_modal.py
+
+# Download trained model from Modal
+download:
+    modal volume get hearsay-finetune outputs/ ./outputs/
+
+# ─── Export ───────────────────────────────────────────────────────────────────
+
+# Convert merged model to MLX 4-bit for local inference
+export:
+    python3 export_gguf.py outputs/merged -o outputs/mlx-4bit
+
+# ─── Regression Testing ──────────────────────────────────────────────────────
+
+# Quick regression check (4 benchmarks, ~5 min on A100)
+regression:
+    modal run eval_regression.py
+
+# Full regression check (6 benchmarks, ~30 min on A100)
+regression-full:
+    modal run eval_regression.py --full
+
+# ─── Full Pipeline ───────────────────────────────────────────────────────────
+
+# End-to-end: data → train → download → export → eval
+all: data train download export eval-finetuned

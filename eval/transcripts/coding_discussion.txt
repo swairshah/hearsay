@@ -1,0 +1,1 @@
+so um i was thinking we should like refactor the app delegate and um move the hotkey monitor stuff into its own class you know because right now its doing too much and like every time we add a new feature it gets harder to to understand whats going on in there

@@ -1,0 +1,1 @@
+I want to understand how do they work, how do they differ from each other, what are the different techniques in training them, how much data does it take to train them, etc. Ah, you can do some Google search, etc. But I want ah totally in the that style so that I get the basics of training a model like that.

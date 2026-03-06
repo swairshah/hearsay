@@ -1,0 +1,1 @@
+So you are saying that we should basically have a conversion agent, like it's almost like a a magpie having its own pie session. That has the ability of like dispatching commands to different running pie sessions. Is that correct?

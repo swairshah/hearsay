@@ -1,0 +1,1 @@
+You should manually check the the audio files that we generated during the the hundred two hundred step. It it looks very very strange. It is like it it it completely loses the voice. There is some weird bug going on.

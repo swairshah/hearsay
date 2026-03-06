@@ -1,0 +1,1 @@
+Wait. Do we need to actually launch it? Can we not just do like Control Tab and first change focus to it, and then inside Emacs maybe we execute the the command or something to go to a specific tab or something? I I don't know. Like I'm I'm just bit polling here.

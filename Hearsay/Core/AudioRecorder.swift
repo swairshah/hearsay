@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import AudioToolbox
 import Accelerate
 
 /// Records audio from the microphone to a WAV file.
@@ -106,23 +107,15 @@ final class AudioRecorder {
     }
     
     private func setupAudioEngine() throws {
-        // If a specific device is requested, set it as the system default input
-        // so AVAudioEngine uses it. This is the most reliable way to control
-        // which mic AVAudioEngine records from — setting the device on the
-        // engine's internal AudioUnit is fragile, especially with Bluetooth.
-        if let uid = deviceUID, let targetID = MicrophoneManager.shared.audioDeviceID(for: uid) {
-            let currentDefault = Self.getSystemDefaultInputDevice()
-            if currentDefault != targetID {
-                Self.setSystemDefaultInputDevice(targetID)
-                print("AudioRecorder: Set system default input to \(targetID) (was \(currentDefault ?? 0))")
-                // Small delay to let CoreAudio propagate the change
-                Thread.sleep(forTimeInterval: 0.05)
-            } else {
-                print("AudioRecorder: Preferred device \(targetID) is already the system default")
-            }
+        let engine = AVAudioEngine()
+        
+        // If a specific device is requested, configure it on the input node's AudioUnit
+        // This approach doesn't modify system-wide settings and only affects this engine instance
+        if let uid = deviceUID, let targetID = Self.audioDeviceID(for: uid) {
+            try setInputDevice(targetID, on: engine.inputNode)
+            print("AudioRecorder: Set engine input device to \(targetID)")
         }
         
-        let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
         
@@ -204,39 +197,93 @@ final class AudioRecorder {
         self.audioEngine = engine
     }
     
-    // MARK: - System Default Input Device
+    // MARK: - Device Configuration
     
-    private static func getSystemDefaultInputDevice() -> AudioDeviceID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
+    /// Sets the input device for the audio engine's input node without modifying system defaults
+    private func setInputDevice(_ deviceID: AudioDeviceID, on inputNode: AVAudioInputNode) throws {
+        var deviceID = deviceID
+        let audioUnit = inputNode.audioUnit
+        
+        guard let audioUnit = audioUnit else {
+            throw NSError(domain: "AudioRecorder", code: 5,
+                         userInfo: [NSLocalizedDescriptionKey: "Input node has no audio unit"])
+        }
+        
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
         )
-        var deviceID: AudioDeviceID = 0
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address, 0, nil, &size, &deviceID
-        )
-        return status == noErr ? deviceID : nil
+        
+        guard status == noErr else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status),
+                         userInfo: [NSLocalizedDescriptionKey: 
+                            "Failed to set audio input device (status: \(status))"])
+        }
     }
     
-    private static func setSystemDefaultInputDevice(_ deviceID: AudioDeviceID) {
+    /// Gets the AudioDeviceID for a given device UID
+    private static func audioDeviceID(for uid: String) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var devID = deviceID
-        let status = AudioObjectSetPropertyData(
+        
+        var propertySize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
             AudioObjectID(kAudioObjectSystemObject),
-            &address, 0, nil,
-            UInt32(MemoryLayout<AudioDeviceID>.size),
-            &devID
+            &address,
+            0,
+            nil,
+            &propertySize
         )
-        if status != noErr {
-            print("AudioRecorder: Failed to set system default input device: \(status)")
+        
+        guard status == noErr else { return nil }
+        
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &propertySize,
+            &deviceIDs
+        )
+        
+        guard status == noErr else { return nil }
+        
+        // Find the device with matching UID
+        for deviceID in deviceIDs {
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            
+            var deviceUID: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            
+            status = AudioObjectGetPropertyData(
+                deviceID,
+                &uidAddress,
+                0,
+                nil,
+                &uidSize,
+                &deviceUID
+            )
+            
+            if status == noErr, deviceUID as String == uid {
+                return deviceID
+            }
         }
+        
+        return nil
     }
     
     private func updateLevel(from buffer: AVAudioPCMBuffer) {

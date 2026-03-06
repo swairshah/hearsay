@@ -9,6 +9,12 @@ final class HistoryWindowController: NSWindowController {
     private var selectedIndex: Int? = nil
     private var cardViews: [HistoryCardView] = []
     
+    private static let pageSize = 100
+    private var loadedCount = 0
+    private var isLoadingMore = false
+    private var hasMore = true
+    private var loadMoreView: NSView?
+    
     convenience init() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
@@ -123,7 +129,22 @@ final class HistoryWindowController: NSWindowController {
     }
     
     private func loadHistory() {
-        items = HistoryStore.shared.getAll()
+        loadedCount = 0
+        hasMore = true
+        items = []
+        loadNextPage()
+    }
+    
+    private func loadNextPage() {
+        guard hasMore, !isLoadingMore else { return }
+        isLoadingMore = true
+        
+        let page = HistoryStore.shared.getItems(offset: loadedCount, limit: Self.pageSize)
+        items.append(contentsOf: page)
+        loadedCount = items.count
+        hasMore = page.count == Self.pageSize && loadedCount < HistoryStore.shared.totalCount
+        isLoadingMore = false
+        
         rebuildCards()
     }
     
@@ -132,6 +153,8 @@ final class HistoryWindowController: NSWindowController {
         for card in cardViews {
             card.removeFromSuperview()
         }
+        loadMoreView?.removeFromSuperview()
+        loadMoreView = nil
         cardViews.removeAll()
         selectedIndex = nil
         
@@ -175,6 +198,32 @@ final class HistoryWindowController: NSWindowController {
             card.widthAnchor.constraint(equalTo: stackView.widthAnchor).isActive = true
             cardViews.append(card)
         }
+        
+        // "Load More" button if there are more items
+        if hasMore {
+            let remaining = HistoryStore.shared.totalCount - loadedCount
+            let loadMoreButton = NSButton(title: "Load More (\(remaining) remaining)", target: self, action: #selector(loadMoreClicked(_:)))
+            loadMoreButton.translatesAutoresizingMaskIntoConstraints = false
+            loadMoreButton.bezelStyle = .rounded
+            
+            let container = NSView()
+            container.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(loadMoreButton)
+            
+            NSLayoutConstraint.activate([
+                loadMoreButton.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                loadMoreButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+                loadMoreButton.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            ])
+            
+            stackView.addArrangedSubview(container)
+            container.widthAnchor.constraint(equalTo: stackView.widthAnchor).isActive = true
+            loadMoreView = container
+        }
+    }
+    
+    @objc private func loadMoreClicked(_ sender: NSButton) {
+        loadNextPage()
     }
     
     @objc private func cardClicked(_ gesture: NSClickGestureRecognizer) {

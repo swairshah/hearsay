@@ -38,9 +38,21 @@ final class AudioRecorder {
     // MARK: - Public
     
     func start() {
-        guard case .idle = state else { 
-            print("AudioRecorder: Not idle, state = \(state)")
-            return 
+        // Allow starting from .idle or .error (so we can recover from previous failures)
+        switch state {
+        case .recording:
+            print("AudioRecorder: Already recording, ignoring start()")
+            return
+        case .error(let prev):
+            print("AudioRecorder: Recovering from previous error: \(prev)")
+            // Clean up any leftover engine state
+            audioEngine?.stop()
+            audioEngine?.inputNode.removeTap(onBus: 0)
+            audioEngine = nil
+            audioFile = nil
+            state = .idle
+        case .idle:
+            break
         }
         
         // Reset audio tracking
@@ -48,23 +60,41 @@ final class AudioRecorder {
         totalSamples = 0
         nonZeroSamples = 0
         
-        do {
-            print("AudioRecorder: Setting up audio session...")
-            try setupAudioSession()
-            print("AudioRecorder: Setting up audio engine...")
-            try setupAudioEngine()
-            print("AudioRecorder: Starting audio engine...")
-            try audioEngine?.start()
-            print("AudioRecorder: Starting level monitoring...")
-            startLevelMonitoring()
-            state = .recording
-            print("AudioRecorder: Started recording to \(Constants.tempAudioURL.path)")
-        } catch {
-            let message = "Failed to start recording: \(error.localizedDescription)"
-            print("AudioRecorder: \(message)")
-            state = .error(message)
-            onError?(message)
+        // Retry up to 2 times on Core Audio transient errors
+        var lastError: Error?
+        for attempt in 1...2 {
+            do {
+                print("AudioRecorder: Setting up audio session... (attempt \(attempt))")
+                try setupAudioSession()
+                print("AudioRecorder: Setting up audio engine...")
+                try setupAudioEngine()
+                print("AudioRecorder: Starting audio engine...")
+                try audioEngine?.start()
+                print("AudioRecorder: Starting level monitoring...")
+                startLevelMonitoring()
+                state = .recording
+                print("AudioRecorder: Started recording to \(Constants.tempAudioURL.path)")
+                return // success
+            } catch {
+                lastError = error
+                print("AudioRecorder: Attempt \(attempt) failed: \(error.localizedDescription)")
+                // Clean up before retry
+                audioEngine?.stop()
+                audioEngine?.inputNode.removeTap(onBus: 0)
+                audioEngine = nil
+                audioFile = nil
+                if attempt < 2 {
+                    // Brief pause before retry to let Core Audio settle
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+            }
         }
+        
+        // All attempts failed
+        let message = "Failed to start recording: \(lastError?.localizedDescription ?? "unknown error")"
+        print("AudioRecorder: \(message)")
+        state = .error(message)
+        onError?(message)
     }
     
     /// Result of stopping recording
@@ -75,6 +105,16 @@ final class AudioRecorder {
     }
     
     func stop() -> StopResult {
+        if case .error(_) = state {
+            // Reset to idle so next start() doesn't need special handling
+            print("AudioRecorder: stop() called in error state, resetting to idle")
+            audioEngine?.stop()
+            audioEngine?.inputNode.removeTap(onBus: 0)
+            audioEngine = nil
+            audioFile = nil
+            state = .idle
+            return StopResult(url: nil, wasSilent: true, peakLevel: 0)
+        }
         guard case .recording = state else { 
             return StopResult(url: nil, wasSilent: true, peakLevel: 0) 
         }
@@ -106,14 +146,36 @@ final class AudioRecorder {
         // But we do need to check microphone permission
     }
     
+    /// Returns the system default input device ID
+    private static func defaultInputDeviceID() -> AudioDeviceID? {
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, 0, nil, &size, &deviceID
+        )
+        return status == noErr ? deviceID : nil
+    }
+    
     private func setupAudioEngine() throws {
         let engine = AVAudioEngine()
         
-        // If a specific device is requested, configure it on the input node's AudioUnit
-        // This approach doesn't modify system-wide settings and only affects this engine instance
+        // If a specific non-default device is requested, configure it on the input node's AudioUnit.
+        // Skip this when the requested device IS the system default — setting it explicitly
+        // can cause AVAudioEngine format negotiation failures (error -10868).
         if let uid = deviceUID, let targetID = Self.audioDeviceID(for: uid) {
-            try setInputDevice(targetID, on: engine.inputNode)
-            print("AudioRecorder: Set engine input device to \(targetID)")
+            let defaultID = Self.defaultInputDeviceID()
+            if targetID != defaultID {
+                try setInputDevice(targetID, on: engine.inputNode)
+                print("AudioRecorder: Set engine input device to \(targetID) (default is \(defaultID ?? 0))")
+            } else {
+                print("AudioRecorder: Requested device \(targetID) is already system default, skipping explicit setInputDevice")
+            }
         }
         
         let inputNode = engine.inputNode

@@ -623,17 +623,20 @@ final class HotkeyMonitor {
         string.utf8.reduce(0) { ($0 << 8) + UInt32($1) }
     }
     
-    /// Check if a modifier key is currently pressed based on flags
+    /// Check if a specific modifier key (left OR right) is pressed using device-dependent flag bits.
+    /// Unlike the high-level masks (.maskAlternate etc.), these bits distinguish left from right.
+    /// Bit values from IOLLEvent.h / IOKit HID.
     private func isModifierKeyPressed(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        let raw = flags.rawValue
         switch keyCode {
-        case 61, 58:  // Right/Left Option
-            return flags.contains(.maskAlternate)
-        case 54, 55:  // Right/Left Command
-            return flags.contains(.maskCommand)
-        case 62, 59:  // Right/Left Control
-            return flags.contains(.maskControl)
-        case 60, 56:  // Right/Left Shift
-            return flags.contains(.maskShift)
+        case 58: return (raw & 0x0020) != 0  // Left Option
+        case 61: return (raw & 0x0040) != 0  // Right Option
+        case 55: return (raw & 0x0008) != 0  // Left Command
+        case 54: return (raw & 0x0010) != 0  // Right Command
+        case 56: return (raw & 0x0002) != 0  // Left Shift
+        case 60: return (raw & 0x0004) != 0  // Right Shift
+        case 59: return (raw & 0x0001) != 0  // Left Control
+        case 62: return (raw & 0x2000) != 0  // Right Control
         default:
             return false
         }
@@ -653,6 +656,10 @@ final class HotkeyMonitor {
     private func isHoldKeyDownInSessionState(flags: CGEventFlags) -> Bool {
         switch holdKeyCode {
         case 54, 55, 56, 58, 59, 60, 61, 62:
+            // For modifier keys, use device-dependent flag bits from the session flags.
+            // CGEventSource.keyState is unreliable for modifiers (reports Right Option as Left),
+            // and the high-level masks (.maskAlternate etc.) can't distinguish left from right.
+            // The device-dependent bits in the lower 16 bits of the raw flags value are correct.
             return isModifierKeyPressed(keyCode: holdKeyCode, flags: flags)
         default:
             return CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(holdKeyCode))

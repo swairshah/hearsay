@@ -580,8 +580,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
                 
-                // Insert text and play paste sound
-                TextInserter.insert(text)
+                // Insert text based on clipboard/paste preferences
+                let copyEnabled = UserDefaults.standard.object(forKey: "copyToClipboard") == nil
+                    ? true
+                    : UserDefaults.standard.bool(forKey: "copyToClipboard")
+                let pasteEnabled = UserDefaults.standard.object(forKey: "autoPasteAtCursor") == nil
+                    ? true
+                    : UserDefaults.standard.bool(forKey: "autoPasteAtCursor")
+
+                if copyEnabled && pasteEnabled {
+                    TextInserter.insert(text)
+                } else if copyEnabled {
+                    TextInserter.copyToClipboard(text)
+                } else if pasteEnabled {
+                    TextInserter.insertWithoutClipboard(text)
+                }
                 SoundPlayer.shared.play(.paste)
                 
                 // In dev mode, preserve the audio recording

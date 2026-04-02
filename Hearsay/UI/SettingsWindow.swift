@@ -1314,9 +1314,16 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
     
     func refresh() {
         items = HistoryStore.shared.getRecent(100)
+        items.sort { $0.timestamp > $1.timestamp }
         tableView.reloadData()
         emptyLabel.isHidden = !items.isEmpty
         scrollView.isHidden = items.isEmpty
+
+        if !items.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                self?.tableView.scrollRowToVisible(0)
+            }
+        }
     }
     
     override func layout() {
@@ -1350,10 +1357,15 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
         
         let cell = NSView()
         
-        let text = NSTextField(wrappingLabelWithString: item.text)
+        let previewText = compactDisplayText(item.text)
+        let text = NSTextField(labelWithString: previewText)
         text.font = .systemFont(ofSize: 12)
         text.lineBreakMode = .byTruncatingTail
-        text.maximumNumberOfLines = 2
+        text.maximumNumberOfLines = 1
+        text.cell?.lineBreakMode = .byTruncatingTail
+        text.cell?.usesSingleLineMode = true
+        text.cell?.wraps = false
+        text.toolTip = item.text
         cell.addSubview(text)
         
         let time = NSTextField(labelWithString: item.formattedTime)
@@ -1369,11 +1381,34 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
             text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
             text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
             
+            time.topAnchor.constraint(greaterThanOrEqualTo: text.bottomAnchor, constant: 4),
             time.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -6),
             time.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
         ])
         
         return cell
+    }
+
+    private func compactDisplayText(_ text: String) -> String {
+        var result = text
+
+        if let range = result.range(of: "\n\nFigure 1:", options: .literal) {
+            result = String(result[..<range.lowerBound])
+        } else if let range = result.range(of: "\nFigure 1:", options: .literal) {
+            result = String(result[..<range.lowerBound])
+        }
+
+        result = result
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .replacingOccurrences(of: "\\n", with: " ")
+            .replacingOccurrences(of: "\\t", with: " ")
+            .replacingOccurrences(of: "\\r", with: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     @objc private func clearAll(_ sender: NSButton) {

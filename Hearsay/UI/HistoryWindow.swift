@@ -1,5 +1,9 @@
 import AppKit
 
+private final class FlippedContentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// Window for viewing and managing transcription history.
 final class HistoryWindowController: NSWindowController {
     
@@ -50,8 +54,8 @@ final class HistoryWindowController: NSWindowController {
         stackView.spacing = 1
         stackView.translatesAutoresizingMaskIntoConstraints = false
         
-        // Wrapper to pin stack to top
-        let wrapperView = NSView()
+        // Wrapper to pin stack to top (flipped so y=0 is top)
+        let wrapperView = FlippedContentView()
         wrapperView.translatesAutoresizingMaskIntoConstraints = false
         wrapperView.addSubview(stackView)
         
@@ -133,6 +137,9 @@ final class HistoryWindowController: NSWindowController {
         hasMore = true
         items = []
         loadNextPage()
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollToMostRecent()
+        }
     }
     
     private func loadNextPage() {
@@ -141,6 +148,7 @@ final class HistoryWindowController: NSWindowController {
         
         let page = HistoryStore.shared.getItems(offset: loadedCount, limit: Self.pageSize)
         items.append(contentsOf: page)
+        items.sort { $0.timestamp > $1.timestamp }
         loadedCount = items.count
         hasMore = page.count == Self.pageSize && loadedCount < HistoryStore.shared.totalCount
         isLoadingMore = false
@@ -196,6 +204,7 @@ final class HistoryWindowController: NSWindowController {
             
             stackView.addArrangedSubview(card)
             card.widthAnchor.constraint(equalTo: stackView.widthAnchor).isActive = true
+            card.heightAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
             cardViews.append(card)
         }
         
@@ -284,11 +293,26 @@ final class HistoryWindowController: NSWindowController {
             HistoryStore.shared.clear()
         }
     }
+
+    private func scrollToMostRecent() {
+        guard let documentView = scrollView.documentView else { return }
+        // Flipped view: y=0 is the top (most recent), so scroll there
+        if documentView.isFlipped {
+            scrollView.contentView.scroll(to: .zero)
+        } else {
+            let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+        }
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
     
     func showWindow() {
         loadHistory()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollToMostRecent()
+        }
     }
 }
 
@@ -298,7 +322,7 @@ private class HistoryCardView: NSView {
     
     var index: Int = 0
     
-    private let textLabel = NSTextField(wrappingLabelWithString: "")
+    private let textLabel = NSTextField(labelWithString: "")
     private let timeLabel = NSTextField(labelWithString: "")
     private let figuresBadge = NSTextField(labelWithString: "")
     private var isSelectedState = false
@@ -316,21 +340,27 @@ private class HistoryCardView: NSView {
     
     private func setup() {
         wantsLayer = true
+        layer?.masksToBounds = true
         
-        // Text label
+        // Text label — single line, truncate tail. No wrapping = no overlap.
         textLabel.translatesAutoresizingMaskIntoConstraints = false
         textLabel.font = .systemFont(ofSize: 13)
         textLabel.textColor = .labelColor
         textLabel.lineBreakMode = .byTruncatingTail
-        textLabel.maximumNumberOfLines = 3
+        textLabel.maximumNumberOfLines = 1
+        textLabel.cell?.lineBreakMode = .byTruncatingTail
         textLabel.cell?.truncatesLastVisibleLine = true
+        textLabel.cell?.usesSingleLineMode = true
+        textLabel.cell?.wraps = false
         textLabel.isSelectable = false
+        textLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(textLabel)
         
         // Time label
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.font = .systemFont(ofSize: 11)
         timeLabel.textColor = .tertiaryLabelColor
+        timeLabel.setContentCompressionResistancePriority(.required, for: .vertical)
         addSubview(timeLabel)
         
         // Figures badge (shows if screenshots attached)
@@ -341,12 +371,12 @@ private class HistoryCardView: NSView {
         addSubview(figuresBadge)
         
         NSLayoutConstraint.activate([
-            // Text
+            // Text — pinned top, single line
             textLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             textLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             textLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             
-            // Time - bottom left
+            // Time — fixed below text, pinned to bottom
             timeLabel.topAnchor.constraint(equalTo: textLabel.bottomAnchor, constant: 6),
             timeLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             timeLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
@@ -360,10 +390,10 @@ private class HistoryCardView: NSView {
     func configure(with item: TranscriptionItem, isEven: Bool) {
         self.isEvenRow = isEven
         
-        // Clean up display text - remove figure paths, keep just [Figure N] references
+        // Clean up display text — single line preview, full text on hover
         let displayText = cleanDisplayText(item.text)
         textLabel.stringValue = displayText
-        textLabel.toolTip = item.text  // Full text on hover
+        textLabel.toolTip = item.text
         
         timeLabel.stringValue = item.formattedTime
         
@@ -381,16 +411,25 @@ private class HistoryCardView: NSView {
     
     private func cleanDisplayText(_ text: String) -> String {
         // Remove the figure paths section at the end
-        // Pattern: "\n\nFigure 1: /path...\nFigure 2: /path..."
         var result = text
         
-        // Find where figure paths start and remove them
         if let range = result.range(of: "\n\nFigure 1:", options: .literal) {
             result = String(result[..<range.lowerBound])
         } else if let range = result.range(of: "\nFigure 1:", options: .literal) {
             result = String(result[..<range.lowerBound])
         }
-        
+
+        // Collapse ALL whitespace (real newlines, tabs, escaped variants) into single spaces
+        result = result
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .replacingOccurrences(of: "\\n", with: " ")
+            .replacingOccurrences(of: "\\t", with: " ")
+            .replacingOccurrences(of: "\\r", with: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     

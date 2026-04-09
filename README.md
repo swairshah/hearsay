@@ -19,7 +19,11 @@ Hold Right Option to record, release to transcribe, auto-paste at cursor.
 brew install --cask swairshah/tap/hearsay
 ```
 
-Or download from [Releases](https://github.com/swairshah/hearsay/releases).
+Or download the latest DMG directly:
+
+**[Download Hearsay 1.0.16 DMG](https://github.com/swairshah/hearsay/releases/download/v1.0.16/Hearsay-1.0.16.dmg)**
+
+You can also browse all [Releases](https://github.com/swairshah/hearsay/releases).
 
 ## Usage
 

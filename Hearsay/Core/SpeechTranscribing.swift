@@ -16,4 +16,9 @@ enum SpeechTranscriptionError: Error, LocalizedError {
 
 protocol SpeechTranscribing {
     func transcribe(audioURL: URL) async throws -> String
+    func prewarm() async
+}
+
+extension SpeechTranscribing {
+    func prewarm() async {}
 }

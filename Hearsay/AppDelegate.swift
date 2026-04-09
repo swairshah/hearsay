@@ -341,7 +341,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func setupModelAndStart() {
-        _ = configureTranscriberIfAvailable()
+        let hasTranscriber = configureTranscriberIfAvailable()
+
+        if hasTranscriber {
+            prewarmActiveTranscriber()
+        }
         
         // Load cleanup model if enabled and downloaded
         if CleanupModelDownloader.shared.isEnabled && CleanupModelDownloader.shared.isModelInstalled() {
@@ -352,6 +356,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Start hotkey monitor
         tryStartHotkeyMonitor()
+    }
+
+    private func prewarmActiveTranscriber() {
+        guard let transcriber = transcriber else { return }
+
+        Task {
+            logger.info("Prewarming speech model for faster first transcription...")
+            await transcriber.prewarm()
+            logger.info("Speech model prewarm complete")
+        }
     }
     
     private func tryStartHotkeyMonitor() {
@@ -854,7 +868,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.tryStartHotkeyMonitor()
         }
         controller.onModelChanged = { [weak self] in
-            _ = self?.configureTranscriberIfAvailable()
+            guard let self else { return }
+            let hasTranscriber = self.configureTranscriberIfAvailable()
+            if hasTranscriber {
+                self.prewarmActiveTranscriber()
+            }
         }
         controller.onCleanupSettingsChanged = { [weak self] in
             guard let self = self else { return }

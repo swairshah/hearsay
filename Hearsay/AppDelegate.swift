@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioRecorder: AudioRecorder!
     private var recordingWindow: RecordingWindow!
     private var recordingIndicator: RecordingIndicator!
-    private var transcriber: Transcriber?
+    private var transcriber: (any SpeechTranscribing)?
     private let cleanupManager = TextCleanupManager()
     private var historyWindowController: HistoryWindowController?
     private var onboardingWindowController: OnboardingWindowController?
@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - State
     
     private var isRecording = false
-    private var currentModelPath: String?
+    private var currentModelIdentifier: String?
     private var indicatorDismissWorkItem: DispatchWorkItem?
     private var currentDismissID: UUID?
     private var currentTranscriptionID: UUID?
@@ -289,39 +289,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func configureTranscriberIfAvailable() -> Bool {
         let installedModels = ModelDownloader.shared.installedModels()
-        
+
         // Prefer the user's selected model if installed, otherwise fall back to first installed.
         let preferredModel = ModelDownloader.shared.selectedModelPreference()
         let targetModel = preferredModel.flatMap { installedModels.contains($0) ? $0 : nil } ?? installedModels.first
-        
+
         if let model = targetModel {
-            let modelPath = Constants.modelsDirectory.appendingPathComponent(model.rawValue).path
-            
-            // Reconfigure if first time or if user switched model.
-            if currentModelPath != modelPath {
-                currentModelPath = modelPath
-                transcriber = Transcriber(modelPath: modelPath)
-                statusBar.updateModelName(model.displayName)
-                logger.info("Using model: \(model.rawValue)")
+            switch model.backend {
+            case .qwenASR:
+                let modelPath = Constants.modelsDirectory.appendingPathComponent(model.rawValue).path
+                let identifier = "qwen:\(modelPath)"
+
+                // Reconfigure if first time or if user switched model.
+                if currentModelIdentifier != identifier {
+                    currentModelIdentifier = identifier
+                    transcriber = Transcriber(modelPath: modelPath)
+                    statusBar.updateModelName(model.displayName)
+                    logger.info("Using qwen_asr model: \(model.rawValue)")
+                }
+                return true
+
+            case .whisperKit:
+                let identifier = "whisper:\(model.rawValue)"
+                if currentModelIdentifier != identifier {
+                    currentModelIdentifier = identifier
+                    transcriber = WhisperTranscriber(modelName: model.rawValue)
+                    statusBar.updateModelName(model.displayName)
+                    logger.info("Using Whisper model: \(model.rawValue)")
+                }
+                return true
             }
-            return true
         }
-        
-        // Check for development model as fallback
+
+        // Check for development qwen model as fallback
         let devModelPath = "/Users/swair/work/misc/qwen-asr/qwen3-asr-0.6b"
         if FileManager.default.fileExists(atPath: devModelPath) {
-            if currentModelPath != devModelPath {
-                currentModelPath = devModelPath
+            let identifier = "qwen:\(devModelPath)"
+            if currentModelIdentifier != identifier {
+                currentModelIdentifier = identifier
                 transcriber = Transcriber(modelPath: devModelPath)
                 statusBar.updateModelName("qwen3-asr-0.6b (dev)")
-                logger.info("Using development model")
+                logger.info("Using development qwen_asr model")
             }
             return true
         }
-        
+
         statusBar.updateModelName(nil)
         transcriber = nil
-        currentModelPath = nil
+        currentModelIdentifier = nil
         return false
     }
     
@@ -515,20 +530,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Simple case: no figures, just transcribe
                 do {
                     text = try await transcriber.transcribe(audioURL: audioURL)
-                } catch Transcriber.TranscriptionError.noOutput {
+                } catch SpeechTranscriptionError.noOutput {
                     // qwen_asr can intermittently return empty output.
                     // Retry once before fallback.
                     logger.warning("No transcription output on first attempt, retrying once")
                     do {
                         text = try await transcriber.transcribe(audioURL: audioURL)
-                    } catch Transcriber.TranscriptionError.noOutput {
+                    } catch SpeechTranscriptionError.noOutput {
                         // Fallback: chunk audio and transcribe piece-by-piece.
                         logger.warning("Retry also returned no output, attempting chunked fallback")
                         let chunkSeconds: Double = 2.0
                         let splitTimes = stride(from: chunkSeconds, to: audioDuration, by: chunkSeconds).map { $0 }
                         
                         guard let chunks = AudioSplitter.splitWAV(at: audioURL, timestamps: splitTimes) else {
-                            throw Transcriber.TranscriptionError.noOutput
+                            throw SpeechTranscriptionError.noOutput
                         }
                         
                         var parts: [String] = []
@@ -538,14 +553,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 if !part.isEmpty {
                                     parts.append(part)
                                 }
-                            } catch Transcriber.TranscriptionError.noOutput {
+                            } catch SpeechTranscriptionError.noOutput {
                                 logger.info("Chunk \(index) produced no output during fallback")
                             }
                         }
                         AudioSplitter.cleanupSegments(chunks)
                         
                         guard !parts.isEmpty else {
-                            throw Transcriber.TranscriptionError.noOutput
+                            throw SpeechTranscriptionError.noOutput
                         }
                         text = parts.joined(separator: " ")
                     }
@@ -563,7 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         do {
                             let segmentText = try await transcriber.transcribe(audioURL: segment)
                             transcripts.append(segmentText)
-                        } catch Transcriber.TranscriptionError.noOutput {
+                        } catch SpeechTranscriptionError.noOutput {
                             // Short/silent segment is expected sometimes when splitting at screenshot boundaries.
                             // Keep placeholder so figure interleaving alignment remains correct.
                             logger.info("Segment \(index) produced no transcription output; continuing")

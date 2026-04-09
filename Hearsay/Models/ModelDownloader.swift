@@ -1,23 +1,46 @@
 import Foundation
 import os.log
+import WhisperKit
 
 private let downloadLogger = Logger(subsystem: "com.swair.hearsay", category: "download")
 
-/// Downloads models from HuggingFace with progress reporting.
+/// Downloads models with progress reporting.
+/// Supports both qwen_asr (file-by-file HuggingFace download) and WhisperKit variants.
 final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
     
     static let shared = ModelDownloader()
     static let selectedModelDefaultsKey = "selectedModelId"
     
+    enum Backend {
+        case qwenASR
+        case whisperKit
+    }
+    
     // Model definitions
     enum Model: String, CaseIterable {
+        // qwen_asr models
         case small = "qwen3-asr-0.6b"
         case large = "qwen3-asr-1.7b"
+
+        // WhisperKit models
+        case whisperTinyEn = "openai_whisper-tiny.en"
+        case whisperSmallEn = "openai_whisper-small.en"
+        
+        var backend: Backend {
+            switch self {
+            case .small, .large:
+                return .qwenASR
+            case .whisperTinyEn, .whisperSmallEn:
+                return .whisperKit
+            }
+        }
         
         var displayName: String {
             switch self {
-            case .small: return "Fast (0.6B)"
-            case .large: return "Quality (1.7B)"
+            case .small: return "Qwen Fast (0.6B)"
+            case .large: return "Qwen Quality (1.7B)"
+            case .whisperTinyEn: return "Whisper tiny.en"
+            case .whisperSmallEn: return "Whisper small.en"
             }
         }
         
@@ -25,13 +48,39 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             switch self {
             case .small: return "Quick transcription, smaller size"
             case .large: return "Better accuracy, larger size"
+            case .whisperTinyEn: return "Fastest local transcription (English)"
+            case .whisperSmallEn: return "Better accuracy than tiny.en (English)"
             }
         }
         
-        var huggingFaceId: String {
+        var huggingFaceId: String? {
             switch self {
             case .small: return "Qwen/Qwen3-ASR-0.6B"
             case .large: return "Qwen/Qwen3-ASR-1.7B"
+            case .whisperTinyEn, .whisperSmallEn: return nil
+            }
+        }
+
+        var whisperVariant: String? {
+            switch self {
+            case .whisperTinyEn, .whisperSmallEn:
+                return rawValue
+            case .small, .large:
+                return nil
+            }
+        }
+
+        /// Cache path under Constants.whisperModelsRootDirectory
+        var whisperCachePathComponents: [String]? {
+            switch self {
+            case .whisperTinyEn:
+                // WhisperKit currently caches under:
+                //   <downloadBase>/models/argmaxinc/whisperkit-coreml/openai_whisper-tiny.en
+                return ["argmaxinc", "whisperkit-coreml", "openai_whisper-tiny.en"]
+            case .whisperSmallEn:
+                return ["argmaxinc", "whisperkit-coreml", "openai_whisper-small.en"]
+            case .small, .large:
+                return nil
             }
         }
         
@@ -55,6 +104,8 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
                     "vocab.json",
                     "merges.txt"
                 ]
+            case .whisperTinyEn, .whisperSmallEn:
+                return []
             }
         }
         
@@ -62,6 +113,8 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             switch self {
             case .small: return 1_288_000_000  // ~1.2 GB
             case .large: return 3_400_000_000  // ~3.4 GB
+            case .whisperTinyEn: return 75_000_000 // ~75 MB
+            case .whisperSmallEn: return 466_000_000 // ~466 MB
             }
         }
         
@@ -85,6 +138,7 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     private var filesToDownload: [String] = []
     private var downloadSession: URLSession?
     private var currentTask: URLSessionDownloadTask?
+    private var whisperDownloadTask: Task<Void, Never>?
     private var completionHandler: ((Bool) -> Void)?
     
     private override init() {
@@ -106,16 +160,47 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     
     /// Check if a model is installed
     func isModelInstalled(_ model: Model) -> Bool {
-        let modelDir = Constants.modelsDirectory.appendingPathComponent(model.rawValue)
-        
-        // Check if all required files exist
-        for file in model.files {
-            let filePath = modelDir.appendingPathComponent(file)
-            if !FileManager.default.fileExists(atPath: filePath.path) {
-                return false
+        switch model.backend {
+        case .qwenASR:
+            let modelDir = Constants.modelsDirectory.appendingPathComponent(model.rawValue)
+            for file in model.files {
+                let filePath = modelDir.appendingPathComponent(file)
+                if !FileManager.default.fileExists(atPath: filePath.path) {
+                    return false
+                }
             }
+            return true
+        case .whisperKit:
+            // Primary expected cache path for current WhisperKit versions
+            if let cachePathComponents = model.whisperCachePathComponents {
+                let modelPath = cachePathComponents.reduce(Constants.whisperModelsRootDirectory) { partialURL, component in
+                    partialURL.appendingPathComponent(component, isDirectory: true)
+                }
+                if FileManager.default.fileExists(atPath: modelPath.path) {
+                    return true
+                }
+            }
+
+            // Backward-compatible fallback for older folder layouts
+            let legacyPathComponents: [String]
+            switch model {
+            case .whisperTinyEn:
+                legacyPathComponents = ["openai", "whisper-tiny.en"]
+            case .whisperSmallEn:
+                legacyPathComponents = ["openai", "whisper-small.en"]
+            case .small, .large:
+                legacyPathComponents = []
+            }
+
+            if !legacyPathComponents.isEmpty {
+                let legacyPath = legacyPathComponents.reduce(Constants.whisperModelsRootDirectory) { partialURL, component in
+                    partialURL.appendingPathComponent(component, isDirectory: true)
+                }
+                return FileManager.default.fileExists(atPath: legacyPath.path)
+            }
+
+            return false
         }
-        return true
     }
     
     /// Get list of installed models
@@ -139,25 +224,42 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         currentModel = model
         currentFileIndex = 0
         filesToDownload = model.files
+        currentFile = ""
+        fileProgress = 0
+        overallProgress = 0
         downloadedBytes = 0
         totalBytes = model.estimatedSize
         completionHandler = completion
-        
-        // Create model directory
-        let modelDir = Constants.modelsDirectory.appendingPathComponent(model.rawValue)
-        try? FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
-        
-        // Create session
-        let config = URLSessionConfiguration.default
-        downloadSession = URLSession(configuration: config, delegate: self, delegateQueue: .main)
-        
-        // Start downloading first file
-        downloadNextFile()
+
+        if isModelInstalled(model) {
+            downloadLogger.info("Model already installed: \(model.rawValue)")
+            downloadComplete()
+            return
+        }
+
+        switch model.backend {
+        case .qwenASR:
+            // Create model directory
+            let modelDir = Constants.modelsDirectory.appendingPathComponent(model.rawValue)
+            try? FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+
+            // Create session
+            let config = URLSessionConfiguration.default
+            downloadSession = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+
+            // Start downloading first file
+            downloadNextFile()
+
+        case .whisperKit:
+            try? FileManager.default.createDirectory(at: Constants.whisperModelsDirectory, withIntermediateDirectories: true)
+            downloadWhisperModel(model)
+        }
     }
     
     /// Cancel current download
     func cancel() {
         currentTask?.cancel()
+        whisperDownloadTask?.cancel()
         downloadSession?.invalidateAndCancel()
         isDownloading = false
         error = "Download cancelled"
@@ -165,6 +267,43 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     }
     
     // MARK: - Private
+
+    private func downloadWhisperModel(_ model: Model) {
+        guard let variant = model.whisperVariant else {
+            error = "Invalid Whisper variant"
+            downloadFailed()
+            return
+        }
+
+        currentFile = model.displayName
+        fileProgress = 0
+        overallProgress = 0
+
+        whisperDownloadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await WhisperKit.download(variant: variant, downloadBase: Constants.whisperModelsDirectory) { progress in
+                    let fraction = progress.fractionCompleted
+                    DispatchQueue.main.async {
+                        self.fileProgress = fraction
+                        self.overallProgress = fraction
+                        self.downloadedBytes = Int64(Double(model.estimatedSize) * fraction)
+                        self.totalBytes = model.estimatedSize
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    self.downloadComplete()
+                }
+            } catch {
+                if Task.isCancelled { return }
+                DispatchQueue.main.async {
+                    self.error = "Failed to download \(model.displayName): \(error.localizedDescription)"
+                    self.downloadFailed()
+                }
+            }
+        }
+    }
     
     private func downloadNextFile() {
         guard let model = currentModel, currentFileIndex < filesToDownload.count else {
@@ -189,7 +328,13 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             return
         }
         
-        let urlString = "https://huggingface.co/\(model.huggingFaceId)/resolve/main/\(filename)"
+        guard let huggingFaceId = model.huggingFaceId else {
+            error = "Missing HuggingFace ID for \(model.displayName)"
+            downloadFailed()
+            return
+        }
+
+        let urlString = "https://huggingface.co/\(huggingFaceId)/resolve/main/\(filename)"
         guard let url = URL(string: urlString) else {
             error = "Invalid URL for \(filename)"
             downloadFailed()
@@ -204,27 +349,40 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     
     private func updateOverallProgress() {
         guard let model = currentModel else { return }
-        
-        // Simple progress: based on file count (not ideal but works)
-        let filesComplete = Double(currentFileIndex)
-        let totalFiles = Double(model.files.count)
-        let currentFileContribution = fileProgress / totalFiles
-        
-        overallProgress = (filesComplete / totalFiles) + currentFileContribution
+
+        switch model.backend {
+        case .qwenASR:
+            // Simple progress: based on file count
+            let filesComplete = Double(currentFileIndex)
+            let totalFiles = Double(max(1, model.files.count))
+            let currentFileContribution = fileProgress / totalFiles
+            overallProgress = (filesComplete / totalFiles) + currentFileContribution
+        case .whisperKit:
+            overallProgress = fileProgress
+        }
     }
     
     private func downloadComplete() {
-        downloadLogger.info("Download complete!")
+        downloadLogger.info("Download complete")
         isDownloading = false
         isComplete = true
+        fileProgress = 1.0
         overallProgress = 1.0
         completionHandler?(true)
+
+        completionHandler = nil
+        currentTask = nil
+        whisperDownloadTask = nil
     }
     
     private func downloadFailed() {
         downloadLogger.error("Download failed: \(self.error ?? "unknown")")
         isDownloading = false
         completionHandler?(false)
+
+        completionHandler = nil
+        currentTask = nil
+        whisperDownloadTask = nil
     }
     
     // MARK: - URLSessionDownloadDelegate
@@ -257,7 +415,6 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     }
     
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        
         if totalBytesExpectedToWrite > 0 {
             fileProgress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
         }

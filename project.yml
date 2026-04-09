@@ -10,6 +10,9 @@ packages:
   LLM.swift:
     url: https://github.com/obra/LLM.swift.git
     branch: main
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit.git
+    from: "0.16.0"
 
 targets:
   Hearsay:
@@ -36,3 +39,4 @@ targets:
     dependencies:
       - package: LLM.swift
         product: LLM
+      - package: WhisperKit

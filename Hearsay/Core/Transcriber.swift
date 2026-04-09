@@ -1,27 +1,7 @@
 import Foundation
 
 /// Runs the bundled qwen_asr binary to transcribe audio files.
-final class Transcriber {
-    
-    enum TranscriptionError: Error, LocalizedError {
-        case binaryNotFound
-        case modelNotFound(String)
-        case transcriptionFailed(String)
-        case noOutput
-        
-        var errorDescription: String? {
-            switch self {
-            case .binaryNotFound:
-                return "Transcription engine not found in app bundle"
-            case .modelNotFound(let path):
-                return "Model not found at: \(path)"
-            case .transcriptionFailed(let message):
-                return "Transcription failed: \(message)"
-            case .noOutput:
-                return "No transcription output"
-            }
-        }
-    }
+final class Transcriber: SpeechTranscribing {
     
     private let modelPath: String
     
@@ -47,7 +27,7 @@ final class Transcriber {
         
         // Verify model exists
         guard FileManager.default.fileExists(atPath: modelPath) else {
-            throw TranscriptionError.modelNotFound(modelPath)
+            throw SpeechTranscriptionError.failed("Model not found at: \(modelPath)")
         }
         
         // Build command
@@ -79,12 +59,12 @@ final class Transcriber {
                     
                     if process.terminationStatus != 0 {
                         print("Transcriber: Error - \(errorOutput)")
-                        continuation.resume(throwing: TranscriptionError.transcriptionFailed(errorOutput))
+                        continuation.resume(throwing: SpeechTranscriptionError.failed(errorOutput))
                         return
                     }
                     
                     if output.isEmpty {
-                        continuation.resume(throwing: TranscriptionError.noOutput)
+                        continuation.resume(throwing: SpeechTranscriptionError.noOutput)
                         return
                     }
                     
@@ -92,7 +72,7 @@ final class Transcriber {
                     continuation.resume(returning: output)
                 }
             } catch {
-                continuation.resume(throwing: TranscriptionError.transcriptionFailed(error.localizedDescription))
+                continuation.resume(throwing: SpeechTranscriptionError.failed(error.localizedDescription))
             }
         }
     }
@@ -135,7 +115,7 @@ final class Transcriber {
             return hardcodedDev
         }
         
-        throw TranscriptionError.binaryNotFound
+        throw SpeechTranscriptionError.failed("Transcription engine not found in app bundle")
     }
     
     // MARK: - Model Discovery

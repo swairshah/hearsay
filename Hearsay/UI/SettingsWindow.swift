@@ -531,90 +531,105 @@ private class SettingsTabView: NSView {
 // MARK: - Models Tab
 
 private class ModelsTabView: NSView {
-    
+
     var onModelSelected: (() -> Void)?
-    
+
     private let titleLabel = NSTextField(labelWithString: "Manage Models")
-    private let subtitleLabel = NSTextField(labelWithString: "Choose a model and set it as active.")
+    private let subtitleLabel = NSTextField(labelWithString: "Choose a speech model backend and set it as active.")
     private let modelSelector = NSStackView()
-    private var smallModelButton: SettingsModelCardView!
-    private var largeModelButton: SettingsModelCardView!
+    private var modelCards: [ModelDownloader.Model: SettingsModelCardView] = [:]
     private let actionButton = NSButton()
     private let progressContainer = NSView()
     private let progressBar = NSProgressIndicator()
     private let progressLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
-    
+
     private var selectedModel: ModelDownloader.Model = .small
     private var cancellables = Set<AnyCancellable>()
-    
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         setupUI()
         setupBindings()
         refresh(initial: true)
     }
-    
+
     required init?(coder: NSCoder) { fatalError() }
-    
+
     private func setupUI() {
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         titleLabel.alignment = .center
         addSubview(titleLabel)
-        
+
         subtitleLabel.font = .systemFont(ofSize: 13)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.alignment = .center
         addSubview(subtitleLabel)
-        
-        smallModelButton = SettingsModelCardView(model: .small, isSelected: true) { [weak self] in
-            self?.selectModel(.small)
+
+        modelSelector.orientation = .vertical
+        modelSelector.spacing = 12
+
+        let models = ModelDownloader.Model.allCases
+        for chunkStart in stride(from: 0, to: models.count, by: 2) {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 12
+            row.distribution = .fillEqually
+
+            for model in models[chunkStart..<min(chunkStart + 2, models.count)] {
+                let card = SettingsModelCardView(model: model, isSelected: false) { [weak self] in
+                    self?.selectModel(model)
+                }
+                row.addArrangedSubview(card)
+                modelCards[model] = card
+            }
+
+            if chunkStart + 1 >= models.count {
+                let spacer = NSView()
+                spacer.translatesAutoresizingMaskIntoConstraints = false
+                row.addArrangedSubview(spacer)
+            }
+
+            modelSelector.addArrangedSubview(row)
         }
-        largeModelButton = SettingsModelCardView(model: .large, isSelected: false) { [weak self] in
-            self?.selectModel(.large)
-        }
-        
-        modelSelector.orientation = .horizontal
-        modelSelector.spacing = 16
-        modelSelector.addArrangedSubview(smallModelButton)
-        modelSelector.addArrangedSubview(largeModelButton)
+
         addSubview(modelSelector)
-        
+
         actionButton.bezelStyle = .rounded
         actionButton.controlSize = .large
         actionButton.target = self
         actionButton.action = #selector(actionTapped)
         addSubview(actionButton)
-        
+
         progressContainer.isHidden = true
         addSubview(progressContainer)
-        
+
         progressBar.style = .bar
         progressBar.isIndeterminate = false
         progressBar.minValue = 0
         progressBar.maxValue = 1
         progressContainer.addSubview(progressBar)
-        
+
         progressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         progressLabel.textColor = .secondaryLabelColor
         progressLabel.alignment = .center
         progressContainer.addSubview(progressLabel)
-        
+
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .tertiaryLabelColor
         statusLabel.alignment = .center
         progressContainer.addSubview(statusLabel)
-        
+
         detailLabel.font = .systemFont(ofSize: 11)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.alignment = .center
         addSubview(detailLabel)
     }
-    
+
     private func setupBindings() {
         let downloader = ModelDownloader.shared
-        
+
         downloader.$overallProgress
             .receive(on: DispatchQueue.main)
             .sink { [weak self] progress in
@@ -622,7 +637,7 @@ private class ModelsTabView: NSView {
                 self?.progressLabel.stringValue = "\(Int(progress * 100))%"
             }
             .store(in: &cancellables)
-        
+
         downloader.$currentFile
             .receive(on: DispatchQueue.main)
             .sink { [weak self] file in
@@ -630,14 +645,14 @@ private class ModelsTabView: NSView {
                 self.statusLabel.stringValue = "Downloading \(file)..."
             }
             .store(in: &cancellables)
-        
+
         downloader.$isDownloading
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refresh()
             }
             .store(in: &cancellables)
-        
+
         downloader.$isComplete
             .receive(on: DispatchQueue.main)
             .sink { [weak self] complete in
@@ -646,7 +661,7 @@ private class ModelsTabView: NSView {
                 self.refresh()
             }
             .store(in: &cancellables)
-        
+
         downloader.$error
             .receive(on: DispatchQueue.main)
             .sink { [weak self] error in
@@ -656,14 +671,15 @@ private class ModelsTabView: NSView {
             }
             .store(in: &cancellables)
     }
-    
+
     private func selectModel(_ model: ModelDownloader.Model) {
         selectedModel = model
-        smallModelButton.setSelected(model == .small)
-        largeModelButton.setSelected(model == .large)
+        for (cardModel, card) in modelCards {
+            card.setSelected(cardModel == model)
+        }
         refresh()
     }
-    
+
     func refresh(initial: Bool = false) {
         if initial {
             if let preferred = ModelDownloader.shared.selectedModelPreference() {
@@ -671,49 +687,44 @@ private class ModelsTabView: NSView {
             } else {
                 selectedModel = .small
             }
-            smallModelButton.setSelected(selectedModel == .small)
-            largeModelButton.setSelected(selectedModel == .large)
         }
-        
+
         let downloader = ModelDownloader.shared
-        let installedSmall = downloader.isModelInstalled(.small)
-        let installedLarge = downloader.isModelInstalled(.large)
-        let selectedInstalled = downloader.isModelInstalled(selectedModel)
         let active = downloader.selectedModelPreference()
-        
-        smallModelButton.setInstalled(installedSmall)
-        largeModelButton.setInstalled(installedLarge)
-        smallModelButton.setActive(active == .small)
-        largeModelButton.setActive(active == .large)
-        
+
+        for model in ModelDownloader.Model.allCases {
+            let card = modelCards[model]
+            card?.setSelected(model == selectedModel)
+            card?.setInstalled(downloader.isModelInstalled(model))
+            card?.setActive(active == model)
+            card?.isEnabled = !downloader.isDownloading
+        }
+
+        let selectedInstalled = downloader.isModelInstalled(selectedModel)
+
         if downloader.isDownloading {
             actionButton.isHidden = true
             progressContainer.isHidden = false
-            smallModelButton.isEnabled = false
-            largeModelButton.isEnabled = false
         } else {
             actionButton.isHidden = false
             progressContainer.isHidden = true
-            smallModelButton.isEnabled = true
-            largeModelButton.isEnabled = true
-            
             actionButton.title = selectedInstalled ? "Use Selected Model" : "Download Selected Model"
-            
+
             let installedNames = downloader.installedModels().map { $0.displayName }.joined(separator: ", ")
             if installedNames.isEmpty {
                 detailLabel.stringValue = "No models installed yet."
-            } else if let active = active {
+            } else if let active {
                 detailLabel.stringValue = "Installed: \(installedNames). Active: \(active.displayName)."
             } else {
                 detailLabel.stringValue = "Installed: \(installedNames)."
             }
         }
     }
-    
+
     @objc private func actionTapped() {
         let model = selectedModel
         let downloader = ModelDownloader.shared
-        
+
         if downloader.isModelInstalled(model) {
             downloader.setSelectedModelPreference(model)
             statusLabel.stringValue = "Active model set to \(model.displayName)"
@@ -721,13 +732,13 @@ private class ModelsTabView: NSView {
             refresh()
             return
         }
-        
+
         statusLabel.stringValue = "Starting download..."
         refresh()
-        
+
         downloader.download(model) { [weak self] success in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self else { return }
                 if success {
                     downloader.setSelectedModelPreference(model)
                     self.statusLabel.stringValue = "Download complete"
@@ -737,32 +748,33 @@ private class ModelsTabView: NSView {
             }
         }
     }
-    
+
     override func layout() {
         super.layout()
-        
+
         let centerX = bounds.midX
         var y = bounds.height - 32
-        
+
         titleLabel.frame = NSRect(x: 20, y: y - 30, width: bounds.width - 40, height: 30)
         y -= 38
         subtitleLabel.frame = NSRect(x: 20, y: y - 22, width: bounds.width - 40, height: 22)
         y -= 34
-        
-        let selectorWidth: CGFloat = min(460, bounds.width - 40)
-        let selectorHeight: CGFloat = 100
-        modelSelector.frame = NSRect(x: centerX - selectorWidth/2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)
+
+        let rows = Int(ceil(Double(ModelDownloader.Model.allCases.count) / 2.0))
+        let selectorWidth: CGFloat = min(680, bounds.width - 40)
+        let selectorHeight: CGFloat = CGFloat(rows) * 100 + CGFloat(max(0, rows - 1)) * 12
+        modelSelector.frame = NSRect(x: centerX - selectorWidth / 2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)
         y -= selectorHeight + 24
-        
+
         actionButton.sizeToFit()
         let buttonWidth = max(220, actionButton.frame.width + 36)
-        actionButton.frame = NSRect(x: centerX - buttonWidth/2, y: y - 34, width: buttonWidth, height: 34)
-        
+        actionButton.frame = NSRect(x: centerX - buttonWidth / 2, y: y - 34, width: buttonWidth, height: 34)
+
         progressContainer.frame = NSRect(x: 60, y: y - 42, width: bounds.width - 120, height: 62)
         progressBar.frame = NSRect(x: 0, y: 36, width: progressContainer.bounds.width, height: 18)
         progressLabel.frame = NSRect(x: 0, y: 16, width: progressContainer.bounds.width, height: 16)
         statusLabel.frame = NSRect(x: 0, y: 0, width: progressContainer.bounds.width, height: 15)
-        
+
         detailLabel.frame = NSRect(x: 20, y: 24, width: bounds.width - 40, height: 18)
     }
 }

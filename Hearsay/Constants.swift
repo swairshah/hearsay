@@ -48,6 +48,15 @@ enum Constants {
     static var tempAudioURL: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("hearsay_recording.wav")
     }
+
+    static var whisperModelsDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Hearsay/WhisperModels", isDirectory: true)
+    }
+
+    static var whisperModelsRootDirectory: URL {
+        whisperModelsDirectory.appendingPathComponent("models", isDirectory: true)
+    }
     
     // MARK: - Model
     static let defaultModelId = "qwen3-asr-0.6b"

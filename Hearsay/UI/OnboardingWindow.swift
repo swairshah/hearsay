@@ -11,7 +11,7 @@ final class OnboardingWindowController: NSWindowController {
     
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 680),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -19,6 +19,7 @@ final class OnboardingWindowController: NSWindowController {
         window.title = "Set Up Hearsay"
         window.center()
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 700, height: 560)
         
         self.init(window: window)
         setupUI()
@@ -389,8 +390,7 @@ private class OnboardingContentView: NSView {
     private let subtitleLabel = NSTextField(labelWithString: "")
     
     private let modelSelector = NSStackView()
-    private var smallModelButton: ModelButton!
-    private var largeModelButton: ModelButton!
+    private var modelCards: [ModelDownloader.Model: ModelButton] = [:]
     
     private let downloadButton = NSButton()
     private let progressContainer = NSView()
@@ -428,7 +428,7 @@ private class OnboardingContentView: NSView {
         addSubview(titleLabel)
         
         // Subtitle
-        subtitleLabel.stringValue = "Local speech-to-text that respects your privacy.\nChoose a model to get started:"
+        subtitleLabel.stringValue = "Local speech-to-text that respects your privacy.\nChoose a model backend to get started:"
         subtitleLabel.font = .systemFont(ofSize: 13)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.alignment = .center
@@ -436,22 +436,35 @@ private class OnboardingContentView: NSView {
         addSubview(subtitleLabel)
         
         // Model buttons
-        smallModelButton = ModelButton(
-            model: .small,
-            isSelected: true,
-            onSelect: { [weak self] in self?.selectModel(.small) }
-        )
-        
-        largeModelButton = ModelButton(
-            model: .large,
-            isSelected: false,
-            onSelect: { [weak self] in self?.selectModel(.large) }
-        )
-        
-        modelSelector.orientation = .horizontal
-        modelSelector.spacing = 16
-        modelSelector.addArrangedSubview(smallModelButton)
-        modelSelector.addArrangedSubview(largeModelButton)
+        modelSelector.orientation = .vertical
+        modelSelector.spacing = 10
+
+        let models = ModelDownloader.Model.allCases
+        for chunkStart in stride(from: 0, to: models.count, by: 2) {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 12
+            row.distribution = .fillEqually
+
+            for model in models[chunkStart..<min(chunkStart + 2, models.count)] {
+                let card = ModelButton(
+                    model: model,
+                    isSelected: false,
+                    onSelect: { [weak self] in self?.selectModel(model) }
+                )
+                row.addArrangedSubview(card)
+                modelCards[model] = card
+            }
+
+            if chunkStart + 1 >= models.count {
+                let spacer = NSView()
+                spacer.translatesAutoresizingMaskIntoConstraints = false
+                row.addArrangedSubview(spacer)
+            }
+
+            modelSelector.addArrangedSubview(row)
+        }
+
         addSubview(modelSelector)
         
         // Download button
@@ -547,8 +560,9 @@ private class OnboardingContentView: NSView {
         y -= 60
         
         // Model selector
-        let selectorWidth: CGFloat = 440
-        let selectorHeight: CGFloat = 100
+        let rows = Int(ceil(Double(ModelDownloader.Model.allCases.count) / 2.0))
+        let selectorWidth: CGFloat = min(680, bounds.width - 40)
+        let selectorHeight: CGFloat = CGFloat(rows) * 100 + CGFloat(max(0, rows - 1)) * 10
         modelSelector.frame = NSRect(x: centerX - selectorWidth/2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)
         y -= selectorHeight + 30
         
@@ -584,8 +598,9 @@ private class OnboardingContentView: NSView {
     
     private func selectModel(_ model: ModelDownloader.Model) {
         selectedModel = model
-        smallModelButton.setSelected(model == .small)
-        largeModelButton.setSelected(model == .large)
+        for (cardModel, card) in modelCards {
+            card.setSelected(cardModel == model)
+        }
         updateDownloadButton()
     }
     
@@ -608,8 +623,9 @@ private class OnboardingContentView: NSView {
         
         downloadButton.isHidden = true
         progressContainer.isHidden = false
-        smallModelButton.isEnabled = false
-        largeModelButton.isEnabled = false
+        for card in modelCards.values {
+            card.isEnabled = false
+        }
         
         ModelDownloader.shared.download(selectedModel) { [weak self] success in
             if !success {
@@ -643,8 +659,9 @@ private class OnboardingContentView: NSView {
     private func resetUI() {
         downloadButton.isHidden = false
         progressContainer.isHidden = true
-        smallModelButton.isEnabled = true
-        largeModelButton.isEnabled = true
+        for card in modelCards.values {
+            card.isEnabled = true
+        }
         progressBar.doubleValue = 0
     }
 }

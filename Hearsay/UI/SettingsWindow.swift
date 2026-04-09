@@ -11,12 +11,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case permissions
         case models
         case microphone
+        case cleanup
     }
     
     var onHotkeyChanged: (() -> Void)?
     var onWindowOpened: (() -> Void)?
     var onWindowClosed: (() -> Void)?
     var onModelChanged: (() -> Void)?
+    var onCleanupSettingsChanged: (() -> Void)?
     
     private let tabView = NSTabView()
     private var settingsTab: SettingsTabView!
@@ -24,17 +26,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var permissionsTab: PermissionsTabView!
     private var modelsTab: ModelsTabView!
     private var microphoneTab: MicrophoneTabView!
+    private var cleanupTab: CleanupTabView!
     
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 540),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 760),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Hearsay"
         window.center()
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 700, height: 560)
         
         self.init(window: window)
         window.delegate = self
@@ -87,6 +91,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         micItem.label = "Microphone"
         micItem.view = microphoneTab
         tabView.addTabViewItem(micItem)
+        
+        // Cleanup tab
+        cleanupTab = CleanupTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
+        cleanupTab.onSettingsChanged = { [weak self] in
+            self?.onCleanupSettingsChanged?()
+        }
+        let cleanupItem = NSTabViewItem(identifier: "cleanup")
+        cleanupItem.label = "Cleanup"
+        cleanupItem.view = cleanupTab
+        tabView.addTabViewItem(cleanupItem)
     }
     
     func show(tab: Tab = .settings) {
@@ -94,6 +108,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         permissionsTab.refresh()
         modelsTab.refresh()
         microphoneTab.refresh()
+        cleanupTab.refresh()
         
         switch tab {
         case .settings:
@@ -106,6 +121,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             tabView.selectTabViewItem(withIdentifier: "models")
         case .microphone:
             tabView.selectTabViewItem(withIdentifier: "microphone")
+        case .cleanup:
+            tabView.selectTabViewItem(withIdentifier: "cleanup")
         }
         
         window?.makeKeyAndOrderFront(nil)
@@ -1680,5 +1697,368 @@ private class ShortcutRecorderView: NSView {
          18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",27:"-",28:"8",29:"0",30:"]",31:"O",32:"U",
          33:"[",34:"I",35:"P",37:"L",38:"J",39:"'",40:"K",41:";",42:"\\",43:",",44:"/",45:"N",46:"M",47:".",50:"`"
         ][kc] ?? "Key \(kc)"
+    }
+}
+
+// MARK: - Cleanup Tab
+
+private class CleanupTabView: NSView, NSTextViewDelegate {
+    
+    var onSettingsChanged: (() -> Void)?
+    
+    private let titleLabel = NSTextField(labelWithString: "Text Cleanup")
+    private let subtitleLabel = NSTextField(labelWithString: "Use a local LLM to clean up transcriptions — removes filler words, fixes punctuation, and polishes text.")
+    
+    private let enabledCheckbox = NSButton(checkboxWithTitle: "Enable text cleanup", target: nil, action: nil)
+    
+    private let modelBox = NSBox()
+    private let modelNameLabel = NSTextField(labelWithString: "")
+    private let modelSizeLabel = NSTextField(labelWithString: "")
+    private let modelDescLabel = NSTextField(labelWithString: "")
+    private let modelStatusLabel = NSTextField(labelWithString: "")
+    
+    private let actionButton = NSButton()
+    private let deleteButton = NSButton(title: "Delete Model", target: nil, action: nil)
+    
+    private let progressContainer = NSView()
+    private let progressBar = NSProgressIndicator()
+    private let progressLabel = NSTextField(labelWithString: "")
+
+    private let promptBox = NSBox()
+    private let promptScrollView = NSScrollView()
+    private let promptTextView = NSTextView()
+    private let resetPromptButton = NSButton(title: "Reset to Default Prompt", target: nil, action: nil)
+    private let openPromptEditorButton = NSButton(title: "Open Full Editor…", target: nil, action: nil)
+    private let promptEditorController = CleanupPromptEditorController()
+    
+    private let exampleBox = NSBox()
+    private let exampleLabel = NSTextField(wrappingLabelWithString: "")
+    
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        setupObservers()
+        refresh()
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    private func setupUI() {
+        // Title
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+        
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        subtitleLabel.preferredMaxLayoutWidth = 480
+        addSubview(subtitleLabel)
+        
+        // Enable checkbox
+        enabledCheckbox.target = self
+        enabledCheckbox.action = #selector(enabledChanged(_:))
+        addSubview(enabledCheckbox)
+        
+        // Model card box
+        modelBox.title = "Cleanup Model"
+        modelBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(modelBox)
+        
+        let model = CleanupModelDownloader.CleanupModel.qwen35_0_8b
+        modelNameLabel.stringValue = model.displayName
+        modelNameLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        modelBox.contentView?.addSubview(modelNameLabel)
+        
+        modelSizeLabel.stringValue = "Size: \(model.estimatedSizeString)"
+        modelSizeLabel.font = .systemFont(ofSize: 11)
+        modelSizeLabel.textColor = .secondaryLabelColor
+        modelBox.contentView?.addSubview(modelSizeLabel)
+        
+        modelDescLabel.stringValue = model.description
+        modelDescLabel.font = .systemFont(ofSize: 11)
+        modelDescLabel.textColor = .tertiaryLabelColor
+        modelBox.contentView?.addSubview(modelDescLabel)
+        
+        modelStatusLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        modelStatusLabel.alignment = .right
+        modelBox.contentView?.addSubview(modelStatusLabel)
+        
+        // Action button
+        actionButton.bezelStyle = .rounded
+        actionButton.controlSize = .large
+        actionButton.target = self
+        actionButton.action = #selector(actionTapped)
+        addSubview(actionButton)
+        
+        // Delete button
+        deleteButton.bezelStyle = .rounded
+        deleteButton.controlSize = .regular
+        deleteButton.contentTintColor = .systemRed
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteTapped)
+        addSubview(deleteButton)
+        
+        // Progress
+        progressContainer.isHidden = true
+        addSubview(progressContainer)
+        
+        progressBar.style = .bar
+        progressBar.isIndeterminate = false
+        progressBar.minValue = 0
+        progressBar.maxValue = 1
+        progressContainer.addSubview(progressBar)
+        
+        progressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        progressLabel.textColor = .secondaryLabelColor
+        progressLabel.alignment = .center
+        progressContainer.addSubview(progressLabel)
+
+        // Prompt editor
+        promptBox.title = "Cleanup Prompt"
+        promptBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(promptBox)
+
+        promptScrollView.borderType = .bezelBorder
+        promptScrollView.hasVerticalScroller = true
+        promptScrollView.hasHorizontalScroller = false
+        promptScrollView.autohidesScrollers = true
+        promptScrollView.drawsBackground = true
+        promptScrollView.backgroundColor = .textBackgroundColor
+
+        promptTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        promptTextView.isRichText = false
+        promptTextView.isAutomaticQuoteSubstitutionEnabled = false
+        promptTextView.isAutomaticDashSubstitutionEnabled = false
+        promptTextView.isAutomaticTextReplacementEnabled = false
+        promptTextView.delegate = self
+        promptTextView.string = CleanupSettings.prompt
+        promptScrollView.documentView = promptTextView
+        promptBox.contentView?.addSubview(promptScrollView)
+
+        resetPromptButton.bezelStyle = .rounded
+        resetPromptButton.controlSize = .small
+        resetPromptButton.target = self
+        resetPromptButton.action = #selector(resetPromptTapped)
+        promptBox.contentView?.addSubview(resetPromptButton)
+
+        openPromptEditorButton.bezelStyle = .rounded
+        openPromptEditorButton.controlSize = .small
+        openPromptEditorButton.target = self
+        openPromptEditorButton.action = #selector(openPromptEditorTapped)
+        promptBox.contentView?.addSubview(openPromptEditorButton)
+        
+        // Example box
+        exampleBox.title = "Example"
+        exampleBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(exampleBox)
+        
+        let exampleText = """
+        Before: "So um like the meeting is at 3pm you know on Tuesday"
+        After:    "The meeting is at 3pm on Tuesday"
+        """
+        exampleLabel.stringValue = exampleText
+        exampleLabel.font = .systemFont(ofSize: 11)
+        exampleLabel.textColor = .secondaryLabelColor
+        exampleLabel.maximumNumberOfLines = 3
+        exampleBox.contentView?.addSubview(exampleLabel)
+    }
+    
+    private func setupObservers() {
+        // Poll-based refresh since CleanupModelDownloader uses @Published (Combine)
+        // and we're in AppKit — simplest to just refresh on a timer when downloading
+        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            let downloader = CleanupModelDownloader.shared
+            if downloader.isDownloading {
+                self.progressBar.doubleValue = downloader.progress
+                self.progressLabel.stringValue = "\(Int(downloader.progress * 100))%"
+            }
+            if downloader.isComplete || downloader.error != nil {
+                self.refresh()
+            }
+        }
+    }
+    
+    func refresh() {
+        let downloader = CleanupModelDownloader.shared
+        let installed = downloader.isModelInstalled()
+        let enabled = downloader.isEnabled
+
+        if window?.firstResponder as AnyObject? !== promptTextView,
+           promptTextView.string != CleanupSettings.prompt {
+            promptTextView.string = CleanupSettings.prompt
+        }
+        
+        enabledCheckbox.state = enabled ? .on : .off
+        enabledCheckbox.isEnabled = installed  // Can only enable if model is downloaded
+        
+        if downloader.isDownloading {
+            actionButton.isHidden = true
+            deleteButton.isHidden = true
+            progressContainer.isHidden = false
+        } else {
+            progressContainer.isHidden = true
+            
+            if installed {
+                actionButton.isHidden = true
+                deleteButton.isHidden = false
+                enabledCheckbox.isEnabled = true
+                modelStatusLabel.stringValue = "✓ Downloaded"
+                modelStatusLabel.textColor = .systemGreen
+            } else {
+                actionButton.isHidden = false
+                actionButton.title = "Download Model"
+                deleteButton.isHidden = true
+                enabledCheckbox.state = .off
+                enabledCheckbox.isEnabled = false
+                modelStatusLabel.stringValue = "Not downloaded"
+                modelStatusLabel.textColor = .tertiaryLabelColor
+            }
+        }
+        
+        if let error = downloader.error {
+            modelStatusLabel.stringValue = "Error: \(error)"
+            modelStatusLabel.textColor = .systemRed
+        }
+    }
+    
+    override func layout() {
+        super.layout()
+        
+        let pad: CGFloat = 20
+        let contentW = bounds.width - pad * 2
+        var y = bounds.height - 22
+        
+        // Title
+        titleLabel.frame = NSRect(x: pad, y: y - 24, width: contentW, height: 24)
+        y -= 30
+        
+        subtitleLabel.frame = NSRect(x: pad, y: y - 34, width: contentW, height: 34)
+        y -= 46
+        
+        // Checkbox
+        enabledCheckbox.frame = NSRect(x: pad, y: y - 20, width: contentW, height: 20)
+        y -= 32
+        
+        // Model box
+        let boxH: CGFloat = 90
+        modelBox.frame = NSRect(x: pad, y: y - boxH, width: contentW, height: boxH)
+        if let cv = modelBox.contentView {
+            let inset: CGFloat = 12
+            modelNameLabel.frame = NSRect(x: inset, y: cv.bounds.height - 24, width: cv.bounds.width - inset * 2 - 120, height: 18)
+            modelStatusLabel.frame = NSRect(x: cv.bounds.width - inset - 120, y: cv.bounds.height - 24, width: 120, height: 18)
+            modelSizeLabel.frame = NSRect(x: inset, y: cv.bounds.height - 44, width: cv.bounds.width - inset * 2, height: 16)
+            modelDescLabel.frame = NSRect(x: inset, y: cv.bounds.height - 62, width: cv.bounds.width - inset * 2, height: 16)
+        }
+        y -= boxH + 12
+        
+        // Action / Progress / Delete
+        let buttonW: CGFloat = 200
+        actionButton.frame = NSRect(x: bounds.midX - buttonW / 2, y: y - 34, width: buttonW, height: 34)
+        deleteButton.sizeToFit()
+        deleteButton.frame.origin = NSPoint(x: bounds.midX - deleteButton.frame.width / 2, y: y - 30)
+
+        progressContainer.frame = NSRect(x: 60, y: y - 42, width: bounds.width - 120, height: 42)
+        progressBar.frame = NSRect(x: 0, y: 20, width: progressContainer.bounds.width, height: 18)
+        progressLabel.frame = NSRect(x: 0, y: 0, width: progressContainer.bounds.width, height: 16)
+        y -= 54
+
+        // Prompt + Example layout (adaptive so controls never overlap)
+        let bottomPad: CGFloat = 12
+        let spacing: CGFloat = 10
+        let minPromptH: CGFloat = 90
+        let preferredExampleH: CGFloat = 70
+        let available = max(0, y - bottomPad)
+
+        let canShowExample = available >= (minPromptH + spacing + preferredExampleH)
+        let exampleH: CGFloat = canShowExample ? preferredExampleH : 0
+        let promptH = max(minPromptH, available - (canShowExample ? (spacing + exampleH) : 0))
+
+        promptBox.frame = NSRect(x: pad, y: max(bottomPad, y - promptH), width: contentW, height: promptH)
+        if let cv = promptBox.contentView {
+            let inset: CGFloat = 10
+            openPromptEditorButton.sizeToFit()
+            openPromptEditorButton.frame = NSRect(
+                x: inset,
+                y: cv.bounds.height - 24,
+                width: openPromptEditorButton.frame.width,
+                height: 18
+            )
+
+            resetPromptButton.sizeToFit()
+            resetPromptButton.frame = NSRect(
+                x: cv.bounds.width - inset - resetPromptButton.frame.width,
+                y: cv.bounds.height - 24,
+                width: resetPromptButton.frame.width,
+                height: 18
+            )
+            promptScrollView.frame = NSRect(
+                x: inset,
+                y: 10,
+                width: cv.bounds.width - inset * 2,
+                height: max(40, cv.bounds.height - 40)
+            )
+            promptTextView.frame = promptScrollView.bounds
+        }
+
+        if canShowExample {
+            exampleBox.isHidden = false
+            exampleBox.frame = NSRect(x: pad, y: bottomPad, width: contentW, height: exampleH)
+            if let cv = exampleBox.contentView {
+                exampleLabel.frame = cv.bounds.insetBy(dx: 12, dy: 4)
+            }
+        } else {
+            exampleBox.isHidden = true
+        }
+    }
+    
+    func textDidChange(_ notification: Notification) {
+        CleanupSettings.prompt = promptTextView.string
+    }
+
+    @objc private func resetPromptTapped() {
+        CleanupSettings.resetPrompt()
+        promptTextView.string = CleanupSettings.prompt
+    }
+
+    @objc private func openPromptEditorTapped() {
+        promptEditorController.show()
+    }
+
+    @objc private func enabledChanged(_ sender: NSButton) {
+        CleanupModelDownloader.shared.isEnabled = sender.state == .on
+        onSettingsChanged?()
+    }
+    
+    @objc private func actionTapped() {
+        CleanupModelDownloader.shared.download { [weak self] success in
+            DispatchQueue.main.async {
+                if success {
+                    CleanupModelDownloader.shared.isEnabled = true
+                    self?.onSettingsChanged?()
+                }
+                self?.refresh()
+            }
+        }
+        refresh()
+    }
+    
+    @objc private func deleteTapped() {
+        let alert = NSAlert()
+        alert.messageText = "Delete Cleanup Model?"
+        alert.informativeText = "This will remove the downloaded model (\(CleanupModelDownloader.CleanupModel.qwen35_0_8b.estimatedSizeString)). You can re-download it anytime."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        
+        if alert.runModal() == .alertFirstButtonReturn {
+            CleanupModelDownloader.shared.isEnabled = false
+            CleanupModelDownloader.shared.deleteModel()
+            onSettingsChanged?()
+            refresh()
+        }
     }
 }

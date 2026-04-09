@@ -31,11 +31,14 @@ fi
 
 # Build
 echo -e "${YELLOW}Building...${NC}"
+# Remove previous build output so stale binaries never get launched on build failure
+rm -rf "$BUILD_APP"
 xcodebuild -project Hearsay.xcodeproj \
     -scheme Hearsay \
     -configuration Debug \
     -derivedDataPath build \
-    build 2>&1 | grep -E "^(Build|error:|warning:|\*\*)" || true
+    -skipMacroValidation \
+    build
 
 # Check build succeeded
 if [ ! -d "$BUILD_APP" ]; then

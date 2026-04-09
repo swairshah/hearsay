@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingWindow: RecordingWindow!
     private var recordingIndicator: RecordingIndicator!
     private var transcriber: Transcriber?
+    private let cleanupManager = TextCleanupManager()
     private var historyWindowController: HistoryWindowController?
     private var onboardingWindowController: OnboardingWindowController?
     private var settingsWindowController: SettingsWindowController?
@@ -102,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyMonitor?.stop()
         indicatorDismissWorkItem?.cancel()
+        cleanupManager.shutdown()
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -325,6 +327,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func setupModelAndStart() {
         _ = configureTranscriberIfAvailable()
+        
+        // Load cleanup model if enabled and downloaded
+        if CleanupModelDownloader.shared.isEnabled && CleanupModelDownloader.shared.isModelInstalled() {
+            Task {
+                await cleanupManager.loadModel()
+            }
+        }
         
         // Start hotkey monitor
         tryStartHotkeyMonitor()
@@ -577,6 +586,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             
+            // Run cleanup if enabled
+            let finalText: String
+            if CleanupModelDownloader.shared.isEnabled, self.cleanupManager.isReady {
+                logger.info("Running cleanup on transcription...")
+                if let cleaned = await self.cleanupManager.clean(text: text) {
+                    logger.info("Cleanup result: \(cleaned.prefix(50))...")
+                    finalText = cleaned
+                } else {
+                    logger.info("Cleanup returned nil, using original text")
+                    finalText = text
+                }
+            } else {
+                finalText = text
+            }
+            
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
                 
@@ -589,11 +613,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     : UserDefaults.standard.bool(forKey: "autoPasteAtCursor")
 
                 if copyEnabled && pasteEnabled {
-                    TextInserter.insert(text)
+                    TextInserter.insert(finalText)
                 } else if copyEnabled {
-                    TextInserter.copyToClipboard(text)
+                    TextInserter.copyToClipboard(finalText)
                 } else if pasteEnabled {
-                    TextInserter.insertWithoutClipboard(text)
+                    TextInserter.insertWithoutClipboard(finalText)
                 }
                 SoundPlayer.shared.play(.paste)
                 
@@ -603,8 +627,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     savedAudioPath = self.preserveRecording(audioURL: audioURL)
                 }
                 
-                // Save to history (save raw text for cleaner history)
-                HistoryStore.shared.add(text: text, durationSeconds: audioDuration, audioFilePath: savedAudioPath)
+                // Save to history
+                HistoryStore.shared.add(text: finalText, durationSeconds: audioDuration, audioFilePath: savedAudioPath)
                 
                 guard self.currentTranscriptionID == transcriptionID else {
                     logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
@@ -816,6 +840,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.onModelChanged = { [weak self] in
             _ = self?.configureTranscriberIfAvailable()
+        }
+        controller.onCleanupSettingsChanged = { [weak self] in
+            guard let self = self else { return }
+            if CleanupModelDownloader.shared.isEnabled && CleanupModelDownloader.shared.isModelInstalled() {
+                Task {
+                    await self.cleanupManager.loadModel()
+                }
+            } else {
+                self.cleanupManager.unloadModel()
+            }
         }
         settingsWindowController = controller
         return controller

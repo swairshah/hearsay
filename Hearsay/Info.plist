@@ -10,9 +10,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.swair.hearsay</string>
     <key>CFBundleVersion</key>
-    <string>15</string>
+    <string>16</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.14</string>
+    <string>1.0.15</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>

@@ -40,3 +40,16 @@ targets:
       - package: LLM.swift
         product: LLM
       - package: WhisperKit
+
+  HearsayTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - HearsayTests
+    dependencies:
+      - target: Hearsay
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Hearsay.app/Contents/MacOS/Hearsay"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES

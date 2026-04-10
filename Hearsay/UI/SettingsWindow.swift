@@ -570,7 +570,7 @@ private class ModelsTabView: NSView {
         modelSelector.orientation = .vertical
         modelSelector.spacing = 12
 
-        let models = ModelDownloader.Model.allCases
+        let models = ModelDownloader.Model.availableModels
         for chunkStart in stride(from: 0, to: models.count, by: 2) {
             let row = NSStackView()
             row.orientation = .horizontal
@@ -692,7 +692,7 @@ private class ModelsTabView: NSView {
         let downloader = ModelDownloader.shared
         let active = downloader.selectedModelPreference()
 
-        for model in ModelDownloader.Model.allCases {
+        for model in ModelDownloader.Model.availableModels {
             let card = modelCards[model]
             card?.setSelected(model == selectedModel)
             card?.setInstalled(downloader.isModelInstalled(model))
@@ -760,7 +760,7 @@ private class ModelsTabView: NSView {
         subtitleLabel.frame = NSRect(x: 20, y: y - 22, width: bounds.width - 40, height: 22)
         y -= 34
 
-        let rows = Int(ceil(Double(ModelDownloader.Model.allCases.count) / 2.0))
+        let rows = Int(ceil(Double(ModelDownloader.Model.availableModels.count) / 2.0))
         let selectorWidth: CGFloat = min(680, bounds.width - 40)
         let selectorHeight: CGFloat = CGFloat(rows) * 100 + CGFloat(max(0, rows - 1)) * 12
         modelSelector.frame = NSRect(x: centerX - selectorWidth / 2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)

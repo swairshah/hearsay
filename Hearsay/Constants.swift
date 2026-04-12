@@ -60,4 +60,13 @@ enum Constants {
     
     // MARK: - Model
     static let defaultModelId = "qwen3-asr-0.6b"
+
+    /// WhisperKit/CoreML speech models are currently offered only on Apple Silicon.
+    static var supportsWhisperKitModels: Bool {
+        #if arch(arm64)
+        true
+        #else
+        false
+        #endif
+    }
 }

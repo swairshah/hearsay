@@ -439,7 +439,7 @@ private class OnboardingContentView: NSView {
         modelSelector.orientation = .vertical
         modelSelector.spacing = 10
 
-        let models = ModelDownloader.Model.allCases
+        let models = ModelDownloader.Model.availableModels
         for chunkStart in stride(from: 0, to: models.count, by: 2) {
             let row = NSStackView()
             row.orientation = .horizontal
@@ -560,7 +560,7 @@ private class OnboardingContentView: NSView {
         y -= 60
         
         // Model selector
-        let rows = Int(ceil(Double(ModelDownloader.Model.allCases.count) / 2.0))
+        let rows = Int(ceil(Double(ModelDownloader.Model.availableModels.count) / 2.0))
         let selectorWidth: CGFloat = min(680, bounds.width - 40)
         let selectorHeight: CGFloat = CGFloat(rows) * 100 + CGFloat(max(0, rows - 1)) * 10
         modelSelector.frame = NSRect(x: centerX - selectorWidth/2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)

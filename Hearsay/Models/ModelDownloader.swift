@@ -25,6 +25,13 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         // WhisperKit models
         case whisperTinyEn = "openai_whisper-tiny.en"
         case whisperSmallEn = "openai_whisper-small.en"
+
+        static var availableModels: [Model] {
+            if Constants.supportsWhisperKitModels {
+                return Self.allCases
+            }
+            return Self.allCases.filter { $0.backend == .qwenASR }
+        }
         
         var backend: Backend {
             switch self {
@@ -148,13 +155,18 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     // MARK: - Public API
     
     func selectedModelPreference() -> Model? {
-        guard let raw = UserDefaults.standard.string(forKey: Self.selectedModelDefaultsKey) else {
+        guard let raw = UserDefaults.standard.string(forKey: Self.selectedModelDefaultsKey),
+              let model = Model(rawValue: raw),
+              Model.availableModels.contains(model) else {
             return nil
         }
-        return Model(rawValue: raw)
+        return model
     }
     
     func setSelectedModelPreference(_ model: Model) {
+        guard Model.availableModels.contains(model) else {
+            return
+        }
         UserDefaults.standard.set(model.rawValue, forKey: Self.selectedModelDefaultsKey)
     }
     
@@ -205,7 +217,7 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     
     /// Get list of installed models
     func installedModels() -> [Model] {
-        Model.allCases.filter { isModelInstalled($0) }
+        Model.availableModels.filter { isModelInstalled($0) }
     }
     
     /// Start downloading a model

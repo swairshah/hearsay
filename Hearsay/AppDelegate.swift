@@ -74,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var indicatorDismissWorkItem: DispatchWorkItem?
     private var currentDismissID: UUID?
     private var currentTranscriptionID: UUID?
+    private var recentRecorderStopFailures = 0
+    private var lastRecorderStopFailureAt: Date?
+    private var didAutoRelaunchForRecorderFailure = false
     
     // MARK: - Lifecycle
     
@@ -484,8 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let stopResult = audioRecorder.stop()
         guard let audioURL = stopResult.url else {
             logger.error("audioRecorder.stop() returned nil!")
-            recordingWindow.fadeOut()
-            showError("Failed to save recording")
+            handleRecorderStopFailure()
             return
         }
         
@@ -788,6 +790,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     // MARK: - Error Handling
+
+    private func handleRecorderStopFailure() {
+        let now = Date()
+        if let last = lastRecorderStopFailureAt, now.timeIntervalSince(last) <= 30 {
+            recentRecorderStopFailures += 1
+        } else {
+            recentRecorderStopFailures = 1
+        }
+        lastRecorderStopFailureAt = now
+
+        fileLogger.log("audioRecorder.stop() returned nil (recent failures: \(recentRecorderStopFailures))")
+
+        // Recreate recorder to clear any transient AVAudioEngine/CoreAudio bad state.
+        setupAudioRecorder()
+        recordingWindow.fadeOut()
+
+        // After repeated failures in a short window, do a one-time self-relaunch.
+        if recentRecorderStopFailures >= 2, !didAutoRelaunchForRecorderFailure {
+            didAutoRelaunchForRecorderFailure = true
+            relaunchAppAfterRecorderFailure()
+            return
+        }
+
+        showError("Recorder reset. Try again")
+    }
+
+    private func relaunchAppAfterRecorderFailure() {
+        logger.error("Repeated recorder failures detected; relaunching app")
+        fileLogger.log("Repeated recorder failures detected; attempting app relaunch")
+
+        recordingIndicator.setState(.error("Restarting app..."))
+        recordingWindow.fadeIn()
+
+        let appURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+
+        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { [weak self] _, error in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                if let error {
+                    logger.error("Failed to relaunch app: \(error.localizedDescription)")
+                    fileLogger.log("Failed to relaunch app: \(error.localizedDescription)")
+                    self.showError("Please restart Hearsay")
+                    self.didAutoRelaunchForRecorderFailure = false
+                    return
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+    }
     
     private func showError(_ message: String) {
         recordingIndicator.setState(.error(message))

@@ -222,10 +222,12 @@ final class AudioRecorder {
                 try setInputDevice(targetID, on: engine.inputNode)
                 print("AudioRecorder: Set engine input device to \(targetID) (default is \(defaultID ?? 0))")
             } catch {
-                // Error -10868 can occur if the device is already set; this is non-fatal.
+                // Some CoreAudio failures are transient during device/routing churn.
+                // Fallback to default input instead of failing the entire recording session.
                 let nsError = error as NSError
-                if nsError.domain == NSOSStatusErrorDomain && nsError.code == -10868 {
-                    print("AudioRecorder: setInputDevice returned -10868 (format negotiation), continuing with default device")
+                if nsError.domain == NSOSStatusErrorDomain,
+                   nsError.code == -10868 || nsError.code == Int(kAudioHardwareIllegalOperationError) {
+                    print("AudioRecorder: setInputDevice failed with \(nsError.code), falling back to default input device")
                 } else {
                     throw error
                 }

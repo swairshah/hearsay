@@ -107,20 +107,26 @@ final class HotkeyMonitor {
         startHoldPolling()
         
         guard eventTap == nil else {
+            hotkeyLogger.info("Event tap already exists, start() returning true")
             return true
         }
         
-        hotkeyLogger.info("Creating hold-mode event tap...")
+        let hasAccess = Self.hasAccessibilityPermission
+        hotkeyLogger.info("Creating hold-mode event tap... (accessibility=\(hasAccess))")
+        
         if createAndStartEventTap() {
+            hotkeyLogger.info("Event tap created successfully!")
             return true
         }
         
-        if !Self.hasAccessibilityPermission {
-            hotkeyLogger.warning("Hold event tap unavailable (accessibility not granted) - toggle hotkey remains active")
-            return true
+        // Event tap failed - return false to trigger retry timer.
+        // The retry timer will keep trying until accessibility is granted
+        // and the event tap is successfully created.
+        if !hasAccess {
+            hotkeyLogger.warning("Hold event tap unavailable (accessibility not granted) - will retry")
+        } else {
+            hotkeyLogger.error("Failed to create hold event tap despite accessibility permission")
         }
-        
-        hotkeyLogger.error("Failed to create hold event tap despite accessibility permission")
         return false
     }
     

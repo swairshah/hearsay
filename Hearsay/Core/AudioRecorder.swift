@@ -212,29 +212,48 @@ final class AudioRecorder {
     private func buildAudioEngine() throws -> (AVAudioEngine, AVAudioFile) {
         let engine = AVAudioEngine()
 
-        // If a specific device is requested, configure it on the input node's AudioUnit.
-        // Always set explicitly to ensure the engine uses the correct device, even if it
-        // appears to match the current system default (the default can change between
-        // engine creation and start, e.g. when an external mic is plugged in).
+        // If a specific device is requested AND it differs from the system default,
+        // configure it on the input node's AudioUnit.
+        // IMPORTANT: Skip setInputDevice when target IS the default — calling it explicitly
+        // on the default device causes AVAudioEngine format negotiation failures (-10868)
+        // because the built-in mic runs at 96kHz but the explicit call triggers a 48kHz
+        // format to be cached, creating a mismatch.
+        var didSetNonDefaultDevice = false
         if let uid = deviceUID, let targetID = Self.audioDeviceID(for: uid) {
             let defaultID = Self.defaultInputDeviceID()
-            do {
-                try setInputDevice(targetID, on: engine.inputNode)
-                print("AudioRecorder: Set engine input device to \(targetID) (default is \(defaultID ?? 0))")
-            } catch {
-                // Some CoreAudio failures are transient during device/routing churn.
-                // Fallback to default input instead of failing the entire recording session.
-                let nsError = error as NSError
-                if nsError.domain == NSOSStatusErrorDomain,
-                   nsError.code == -10868 || nsError.code == Int(kAudioHardwareIllegalOperationError) {
-                    print("AudioRecorder: setInputDevice failed with \(nsError.code), falling back to default input device")
-                } else {
-                    throw error
+            if targetID != defaultID {
+                do {
+                    try setInputDevice(targetID, on: engine.inputNode)
+                    print("AudioRecorder: Set engine input device to \(targetID) (default is \(defaultID ?? 0))")
+                    didSetNonDefaultDevice = true
+                } catch {
+                    // Some CoreAudio failures are transient during device/routing churn.
+                    // Fallback to default input instead of failing the entire recording session.
+                    let nsError = error as NSError
+                    if nsError.domain == NSOSStatusErrorDomain,
+                       nsError.code == -10868 || nsError.code == Int(kAudioHardwareIllegalOperationError) {
+                        print("AudioRecorder: setInputDevice failed with \(nsError.code), falling back to default input device")
+                    } else {
+                        throw error
+                    }
                 }
+            } else {
+                print("AudioRecorder: Requested device \(targetID) is already system default, skipping explicit setInputDevice")
             }
         }
 
+        // Reset the engine ONLY if we set a non-default device.
+        // This forces AVAudioEngine to re-query the hardware format after device change.
+        if didSetNonDefaultDevice {
+            engine.reset()
+            print("AudioRecorder: Reset engine after setting non-default device")
+        }
+
         let inputNode = engine.inputNode
+        
+        // Query the actual hardware format to log it
+        let hwFormat = inputNode.inputFormat(forBus: 0)
+        print("AudioRecorder: Hardware input format: \(hwFormat.channelCount)ch @ \(hwFormat.sampleRate)Hz")
 
         // Target format: 16kHz mono for qwen_asr
         guard let targetFormat = AVAudioFormat(
@@ -266,10 +285,10 @@ final class AudioRecorder {
         )
 
         // Install tap on input — pass nil for format so AVAudioEngine uses the
-        // node's native format, avoiding mismatches after device changes.
-        // The converter is created lazily from the actual buffer format to handle
-        // cases where the running format differs from what was expected
-        // (e.g. when an external mic changes the audio hardware configuration).
+        // node's native format. This works correctly now that we skip setInputDevice
+        // for the default device (avoiding the format cache mismatch).
+        // For non-default devices, we reset the engine after setting the device,
+        // which also ensures the format is correct.
         let bufferSize: AVAudioFrameCount = 4096
         var cachedConverter: AVAudioConverter?
         var cachedSampleRate: Double = 0

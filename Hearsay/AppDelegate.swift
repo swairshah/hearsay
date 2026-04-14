@@ -109,6 +109,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanupManager.shutdown()
     }
     
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // When user returns from System Settings after granting permissions,
+        // immediately retry hotkey monitor startup so shortcuts begin working
+        // without requiring an app relaunch.
+        if PermissionsManager.checkAccessibility() == .granted {
+            tryStartHotkeyMonitor()
+        }
+    }
+    
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         // When clicking dock icon, show settings
         showSettings()
@@ -273,6 +282,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !micGranted || !accessGranted || !hasModel {
             // Show onboarding for permissions and/or model download
             showOnboardingForSetup()
+            
+            // Keep hotkey monitor startup/retry loop armed even while onboarding is shown.
+            // This ensures accessibility permission changes are picked up immediately
+            // (without needing app restart).
+            tryStartHotkeyMonitor()
         } else {
             // All good, just set up the model and start
             setupModelAndStart()

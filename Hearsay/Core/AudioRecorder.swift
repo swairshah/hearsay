@@ -78,7 +78,9 @@ final class AudioRecorder {
 
         audioQueue.async { [self] in
             var lastError: Error?
-            for attempt in 1...2 {
+            var forceDefaultInputOnNextAttempt = false
+
+            for attempt in 1...3 {
                 // Check if this start was cancelled by a stop()
                 guard currentGen == generation else {
                     print("AudioRecorder: Setup cancelled (generation mismatch)")
@@ -86,8 +88,8 @@ final class AudioRecorder {
                 }
 
                 do {
-                    print("AudioRecorder: Setting up audio engine... (attempt \(attempt))")
-                    let (engine, file) = try buildAudioEngine()
+                    print("AudioRecorder: Setting up audio engine... (attempt \(attempt), forceDefaultInput=\(forceDefaultInputOnNextAttempt))")
+                    let (engine, file) = try buildAudioEngine(forceDefaultInput: forceDefaultInputOnNextAttempt)
 
                     guard currentGen == generation else {
                         print("AudioRecorder: Setup cancelled after build (generation mismatch)")
@@ -115,7 +117,15 @@ final class AudioRecorder {
                 } catch {
                     lastError = error
                     print("AudioRecorder: Attempt \(attempt) failed: \(error.localizedDescription)")
-                    if attempt < 2 {
+
+                    if isFormatMismatchError(error), !forceDefaultInputOnNextAttempt {
+                        // Fallback path for aggregate/default route churn where explicit
+                        // setInputDevice can trigger 96kHz↔48kHz graph mismatch (-10868).
+                        print("AudioRecorder: Detected format mismatch; retrying with system default input path")
+                        forceDefaultInputOnNextAttempt = true
+                    }
+
+                    if attempt < 3 {
                         // Brief pause before retry to let Core Audio settle
                         Thread.sleep(forTimeInterval: 0.1)
                     }
@@ -209,7 +219,7 @@ final class AudioRecorder {
     /// Called on audioQueue (background) to avoid deadlocking the main thread
     /// when CoreAudio's internal queues are busy during device changes.
     /// Returns the engine and audio file — caller is responsible for assigning to self.
-    private func buildAudioEngine() throws -> (AVAudioEngine, AVAudioFile) {
+    private func buildAudioEngine(forceDefaultInput: Bool = false) throws -> (AVAudioEngine, AVAudioFile) {
         let engine = AVAudioEngine()
 
         // If a specific device is requested AND it differs from the system default,
@@ -219,7 +229,9 @@ final class AudioRecorder {
         // because the built-in mic runs at 96kHz but the explicit call triggers a 48kHz
         // format to be cached, creating a mismatch.
         var didSetNonDefaultDevice = false
-        if let uid = deviceUID, let targetID = Self.audioDeviceID(for: uid) {
+        if forceDefaultInput {
+            print("AudioRecorder: Using fallback mode (system default input, no explicit setInputDevice)")
+        } else if let uid = deviceUID, let targetID = Self.audioDeviceID(for: uid) {
             let defaultID = Self.defaultInputDeviceID()
             if targetID != defaultID {
                 do {
@@ -350,6 +362,24 @@ final class AudioRecorder {
         }
 
         return (engine, audioFile)
+    }
+
+    private func isFormatMismatchError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.code == -10868 { return true }
+
+        if nsError.domain == NSOSStatusErrorDomain,
+           nsError.code == -10868 {
+            return true
+        }
+
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.code == -10868 {
+            return true
+        }
+
+        let msg = nsError.localizedDescription.lowercased()
+        return msg.contains("10868") || msg.contains("formats don't match")
     }
 
     // MARK: - Device Configuration

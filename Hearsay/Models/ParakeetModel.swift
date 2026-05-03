@@ -25,6 +25,11 @@ enum ParakeetModel: String, CaseIterable {
         650_000_000
     }
 
+    var cacheDirectoryNames: [String] {
+        let fluidAudioFolderName = rawValue.replacingOccurrences(of: "-coreml", with: "")
+        return [rawValue, fluidAudioFolderName]
+    }
+
     static func containsCompiledModel(in directory: URL) -> Bool {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: directory.path) else {
@@ -51,8 +56,10 @@ enum ParakeetModel: String, CaseIterable {
         for root in Self.candidateRoots() {
             for vendorDirectory in ["fluidaudio/Models", "FluidAudio/Models"] {
                 let base = root.appendingPathComponent(vendorDirectory, isDirectory: true)
-                let direct = base.appendingPathComponent(identifier, isDirectory: true)
-                directories.append(direct)
+                for directoryName in cacheDirectoryNames {
+                    let direct = base.appendingPathComponent(directoryName, isDirectory: true)
+                    directories.append(direct)
+                }
 
                 guard let items = try? fileManager.contentsOfDirectory(
                     at: base,
@@ -62,7 +69,7 @@ enum ParakeetModel: String, CaseIterable {
                     continue
                 }
 
-                for item in items where item.lastPathComponent.hasPrefix(identifier) && item != direct {
+                for item in items where cacheDirectoryNames.contains(where: { item.lastPathComponent.hasPrefix($0) }) {
                     directories.append(item)
                 }
             }

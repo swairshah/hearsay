@@ -48,6 +48,17 @@ final class ModelDownloaderTests: XCTestCase {
         XCTAssertGreaterThan(model.estimatedSize, 0)
     }
 
+    func testParakeetCacheDirectoryNamesIncludeFluidAudioFolderName() {
+        XCTAssertEqual(
+            ParakeetModel.englishV2.cacheDirectoryNames,
+            ["parakeet-tdt-0.6b-v2-coreml", "parakeet-tdt-0.6b-v2"]
+        )
+        XCTAssertEqual(
+            ParakeetModel.multilingualV3.cacheDirectoryNames,
+            ["parakeet-tdt-0.6b-v3-coreml", "parakeet-tdt-0.6b-v3"]
+        )
+    }
+
     func testSelectedModelPreferenceRoundTrip() {
         let downloader = ModelDownloader.shared
         downloader.setSelectedModelPreference(.whisperSmallEn)

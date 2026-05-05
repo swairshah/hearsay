@@ -657,20 +657,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             
-            // Run cleanup if enabled
-            let finalText: String
+            // Run LLM post processing if enabled.
+            let postProcessedText: String
             if CleanupModelDownloader.shared.isEnabled, self.cleanupManager.isReady {
-                logger.info("Running cleanup on transcription...")
+                logger.info("Running post processing on transcription...")
                 if let cleaned = await self.cleanupManager.clean(text: text) {
-                    logger.info("Cleanup result: \(cleaned.prefix(50))...")
-                    finalText = cleaned
+                    logger.info("Post processing result: \(cleaned.prefix(50))...")
+                    postProcessedText = cleaned
                 } else {
-                    logger.info("Cleanup returned nil, using original text")
-                    finalText = text
+                    logger.info("Post processing returned nil, using original text")
+                    postProcessedText = text
                 }
             } else {
-                finalText = text
+                postProcessedText = text
             }
+
+            let finalText = TranscriptProcessor.process(postProcessedText)
             
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")

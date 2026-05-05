@@ -12,6 +12,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case models
         case microphone
         case cleanup
+        case shortcuts
+        case postProcessing
     }
     
     var onHotkeyChanged: (() -> Void)?
@@ -26,7 +28,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var permissionsTab: PermissionsTabView!
     private var modelsTab: ModelsTabView!
     private var microphoneTab: MicrophoneTabView!
-    private var cleanupTab: CleanupTabView!
+    private var cleanupTab: DeterministicCleanupTabView!
+    private var shortcutsTab: ShortcutReplacementTabView!
+    private var postProcessingTab: CleanupTabView!
     
     convenience init() {
         let window = NSWindow(
@@ -92,15 +96,29 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         micItem.view = microphoneTab
         tabView.addTabViewItem(micItem)
         
+        // Shortcuts tab
+        shortcutsTab = ShortcutReplacementTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
+        let shortcutsItem = NSTabViewItem(identifier: "shortcuts")
+        shortcutsItem.label = "Shortcuts"
+        shortcutsItem.view = shortcutsTab
+        tabView.addTabViewItem(shortcutsItem)
+
         // Cleanup tab
-        cleanupTab = CleanupTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
-        cleanupTab.onSettingsChanged = { [weak self] in
-            self?.onCleanupSettingsChanged?()
-        }
+        cleanupTab = DeterministicCleanupTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
         let cleanupItem = NSTabViewItem(identifier: "cleanup")
         cleanupItem.label = "Cleanup"
         cleanupItem.view = cleanupTab
         tabView.addTabViewItem(cleanupItem)
+
+        // Post Processing tab
+        postProcessingTab = CleanupTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
+        postProcessingTab.onSettingsChanged = { [weak self] in
+            self?.onCleanupSettingsChanged?()
+        }
+        let postProcessingItem = NSTabViewItem(identifier: "postProcessing")
+        postProcessingItem.label = "Post Processing"
+        postProcessingItem.view = postProcessingTab
+        tabView.addTabViewItem(postProcessingItem)
     }
     
     func show(tab: Tab = .settings) {
@@ -109,6 +127,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         modelsTab.refresh()
         microphoneTab.refresh()
         cleanupTab.refresh()
+        shortcutsTab.refresh()
+        postProcessingTab.refresh()
         
         switch tab {
         case .settings:
@@ -123,6 +143,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             tabView.selectTabViewItem(withIdentifier: "microphone")
         case .cleanup:
             tabView.selectTabViewItem(withIdentifier: "cleanup")
+        case .shortcuts:
+            tabView.selectTabViewItem(withIdentifier: "shortcuts")
+        case .postProcessing:
+            tabView.selectTabViewItem(withIdentifier: "postProcessing")
         }
         
         window?.makeKeyAndOrderFront(nil)
@@ -1712,16 +1736,635 @@ private class ShortcutRecorderView: NSView {
     }
 }
 
-// MARK: - Cleanup Tab
+// MARK: - Deterministic Cleanup Tab
+
+private class DeterministicCleanupTabView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "Cleanup")
+    private let subtitleLabel = NSTextField(labelWithString: "Remove deterministic transcription errors before text is inserted or copied.")
+    private let enabledCheckbox = NSButton(checkboxWithTitle: "Enable cleanup rules", target: nil, action: nil)
+    private let rulesBox = NSBox()
+    private let headerLabel = NSTextField(labelWithString: "On        Pattern")
+    private let scrollView = NSScrollView()
+    private let rowsContainer = NSView()
+    private let addButton = NSButton(title: "Add Rule", target: nil, action: nil)
+    private let resetButton = NSButton(title: "Reset Defaults", target: nil, action: nil)
+    private let exampleBox = NSBox()
+    private let exampleLabel = NSTextField(wrappingLabelWithString: "")
+
+    private var rules: [CleanupRule] = []
+    private var rowViews: [CleanupRuleRowView] = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupUI() {
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        subtitleLabel.preferredMaxLayoutWidth = 520
+        addSubview(subtitleLabel)
+
+        enabledCheckbox.target = self
+        enabledCheckbox.action = #selector(enabledChanged(_:))
+        addSubview(enabledCheckbox)
+
+        rulesBox.title = "Rules"
+        rulesBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(rulesBox)
+
+        headerLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        headerLabel.textColor = .secondaryLabelColor
+        rulesBox.contentView?.addSubview(headerLabel)
+
+        scrollView.borderType = .bezelBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = rowsContainer
+        rulesBox.contentView?.addSubview(scrollView)
+
+        addButton.bezelStyle = .rounded
+        addButton.target = self
+        addButton.action = #selector(addRuleTapped)
+        rulesBox.contentView?.addSubview(addButton)
+
+        resetButton.bezelStyle = .rounded
+        resetButton.target = self
+        resetButton.action = #selector(resetRulesTapped)
+        rulesBox.contentView?.addSubview(resetButton)
+
+        exampleBox.title = "Example"
+        exampleBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(exampleBox)
+
+        exampleLabel.stringValue = "Before: \"So uh, the meeting is tomorrow.\"\nAfter:    \"So the meeting is tomorrow.\""
+        exampleLabel.font = .systemFont(ofSize: 11)
+        exampleLabel.textColor = .secondaryLabelColor
+        exampleLabel.maximumNumberOfLines = 3
+        exampleBox.contentView?.addSubview(exampleLabel)
+    }
+
+    func refresh() {
+        rules = TranscriptProcessingSettings.cleanupRules
+        enabledCheckbox.state = TranscriptProcessingSettings.cleanupEnabled ? .on : .off
+        reloadRows()
+    }
+
+    override func layout() {
+        super.layout()
+
+        let pad: CGFloat = 20
+        let contentW = bounds.width - pad * 2
+        var y = bounds.height - 22
+
+        titleLabel.frame = NSRect(x: pad, y: y - 24, width: contentW, height: 24)
+        y -= 30
+        subtitleLabel.frame = NSRect(x: pad, y: y - 34, width: contentW, height: 34)
+        y -= 46
+        enabledCheckbox.frame = NSRect(x: pad, y: y - 20, width: contentW, height: 20)
+        y -= 34
+
+        let exampleH: CGFloat = 72
+        let rulesBottom = pad + exampleH + 12
+        rulesBox.frame = NSRect(x: pad, y: rulesBottom, width: contentW, height: max(220, y - rulesBottom))
+        layoutRulesBox()
+
+        exampleBox.frame = NSRect(x: pad, y: pad, width: contentW, height: exampleH)
+        if let cv = exampleBox.contentView {
+            exampleLabel.frame = cv.bounds.insetBy(dx: 12, dy: 4)
+        }
+    }
+
+    private func layoutRulesBox() {
+        guard let cv = rulesBox.contentView else { return }
+        let inset: CGFloat = 10
+        headerLabel.frame = NSRect(x: inset, y: cv.bounds.height - 24, width: cv.bounds.width - inset * 2, height: 16)
+        addButton.frame = NSRect(x: inset, y: 8, width: 92, height: 26)
+        resetButton.frame = NSRect(x: cv.bounds.width - inset - 112, y: 8, width: 112, height: 26)
+        scrollView.frame = NSRect(
+            x: inset,
+            y: 42,
+            width: cv.bounds.width - inset * 2,
+            height: max(80, cv.bounds.height - 70)
+        )
+        layoutRows()
+    }
+
+    private func reloadRows() {
+        rowViews.forEach { $0.removeFromSuperview() }
+        rowViews = rules.map { rule in
+            let row = CleanupRuleRowView(rule: rule)
+            row.onChange = { [weak self] updated in
+                self?.update(updated)
+            }
+            row.onDelete = { [weak self] id in
+                self?.deleteRule(id)
+            }
+            rowsContainer.addSubview(row)
+            return row
+        }
+        layoutRows()
+    }
+
+    private func layoutRows() {
+        let rowH: CGFloat = 38
+        let gap: CGFloat = 6
+        let totalH = max(scrollView.contentSize.height, CGFloat(rowViews.count) * (rowH + gap))
+        rowsContainer.frame = NSRect(x: 0, y: 0, width: scrollView.contentSize.width, height: totalH)
+
+        for (index, row) in rowViews.enumerated() {
+            let y = totalH - CGFloat(index + 1) * rowH - CGFloat(index) * gap
+            row.frame = NSRect(x: 0, y: y, width: rowsContainer.bounds.width, height: rowH)
+        }
+    }
+
+    private func persist() {
+        TranscriptProcessingSettings.cleanupRules = rules
+    }
+
+    private func update(_ rule: CleanupRule) {
+        guard let index = rules.firstIndex(where: { $0.id == rule.id }) else { return }
+        rules[index] = rule
+        persist()
+    }
+
+    private func deleteRule(_ id: UUID) {
+        rules.removeAll { $0.id == id }
+        persist()
+        reloadRows()
+    }
+
+    @objc private func enabledChanged(_ sender: NSButton) {
+        TranscriptProcessingSettings.cleanupEnabled = sender.state == .on
+    }
+
+    @objc private func addRuleTapped() {
+        rules.append(CleanupRule(pattern: ""))
+        persist()
+        reloadRows()
+    }
+
+    @objc private func resetRulesTapped() {
+        TranscriptProcessingSettings.resetCleanupRules()
+        refresh()
+    }
+}
+
+private class CleanupRuleRowView: NSView, NSTextFieldDelegate {
+    var onChange: ((CleanupRule) -> Void)?
+    var onDelete: ((UUID) -> Void)?
+
+    private var rule: CleanupRule
+    private let checkbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let patternField = NSTextField()
+    private let deleteButton = NSButton(title: "", target: nil, action: nil)
+
+    init(rule: CleanupRule) {
+        self.rule = rule
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.cornerRadius = 6
+
+        checkbox.state = rule.isEnabled ? .on : .off
+        checkbox.target = self
+        checkbox.action = #selector(checkboxChanged(_:))
+        addSubview(checkbox)
+
+        patternField.placeholderString = "Regex pattern"
+        patternField.stringValue = rule.pattern
+        patternField.delegate = self
+        addSubview(patternField)
+
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Delete")
+        deleteButton.bezelStyle = .inline
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteTapped)
+        addSubview(deleteButton)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let inset: CGFloat = 8
+        checkbox.frame = NSRect(x: inset, y: 9, width: 24, height: 20)
+        deleteButton.frame = NSRect(x: bounds.width - inset - 28, y: 5, width: 28, height: 28)
+        patternField.frame = NSRect(x: 40, y: 6, width: max(80, bounds.width - 82), height: 24)
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        rule.pattern = patternField.stringValue
+        onChange?(rule)
+    }
+
+    @objc private func checkboxChanged(_ sender: NSButton) {
+        rule.isEnabled = sender.state == .on
+        onChange?(rule)
+    }
+
+    @objc private func deleteTapped() {
+        onDelete?(rule.id)
+    }
+}
+
+// MARK: - Shortcut Replacement Tab
+
+private class ShortcutReplacementTabView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "Shortcuts")
+    private let subtitleLabel = NSTextField(labelWithString: "Replace spoken phrases like my email with saved text snippets.")
+    private let enabledCheckbox = NSButton(checkboxWithTitle: "Enable shortcuts", target: nil, action: nil)
+    private let shortcutsBox = NSBox()
+    private let headerLabel = NSTextField(labelWithString: "On        Key                                                      Value")
+    private let scrollView = NSScrollView()
+    private let rowsContainer = NSView()
+    private let addButton = NSButton(title: "+", target: nil, action: nil)
+    private let exampleBox = NSBox()
+    private let exampleLabel = NSTextField(wrappingLabelWithString: "")
+
+    private var shortcuts: [TextShortcut] = []
+    private var rowViews: [ShortcutRuleRowView] = []
+
+    private enum FocusField {
+        case key
+        case value
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupUI() {
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.alignment = .center
+        addSubview(titleLabel)
+
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        subtitleLabel.preferredMaxLayoutWidth = 520
+        addSubview(subtitleLabel)
+
+        enabledCheckbox.target = self
+        enabledCheckbox.action = #selector(enabledChanged(_:))
+        addSubview(enabledCheckbox)
+
+        shortcutsBox.title = "Shortcut Replacements"
+        shortcutsBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(shortcutsBox)
+
+        headerLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        headerLabel.textColor = .secondaryLabelColor
+        shortcutsBox.contentView?.addSubview(headerLabel)
+
+        scrollView.borderType = .bezelBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = rowsContainer
+        shortcutsBox.contentView?.addSubview(scrollView)
+
+        addButton.bezelStyle = .rounded
+        addButton.font = .systemFont(ofSize: 17, weight: .medium)
+        addButton.target = self
+        addButton.action = #selector(addShortcutTapped)
+        shortcutsBox.contentView?.addSubview(addButton)
+
+        exampleBox.title = "Example"
+        exampleBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+        addSubview(exampleBox)
+
+        exampleLabel.stringValue = "Key: my email\nValue: sam@example.com"
+        exampleLabel.font = .systemFont(ofSize: 11)
+        exampleLabel.textColor = .secondaryLabelColor
+        exampleLabel.maximumNumberOfLines = 3
+        exampleBox.contentView?.addSubview(exampleLabel)
+    }
+
+    func refresh() {
+        shortcuts = TranscriptProcessingSettings.shortcuts.filter { !Self.isEmpty($0) }
+        if shortcuts.count != TranscriptProcessingSettings.shortcuts.count {
+            persist()
+        }
+        enabledCheckbox.state = TranscriptProcessingSettings.shortcutsEnabled ? .on : .off
+        reloadRows()
+    }
+
+    override func layout() {
+        super.layout()
+
+        let pad: CGFloat = 20
+        let contentW = bounds.width - pad * 2
+        var y = bounds.height - 22
+
+        titleLabel.frame = NSRect(x: pad, y: y - 24, width: contentW, height: 24)
+        y -= 30
+        subtitleLabel.frame = NSRect(x: pad, y: y - 34, width: contentW, height: 34)
+        y -= 46
+        enabledCheckbox.frame = NSRect(x: pad, y: y - 20, width: contentW, height: 20)
+        y -= 34
+
+        let exampleH: CGFloat = 72
+        let boxBottom = pad + exampleH + 12
+        shortcutsBox.frame = NSRect(x: pad, y: boxBottom, width: contentW, height: max(220, y - boxBottom))
+        layoutShortcutsBox()
+
+        exampleBox.frame = NSRect(x: pad, y: pad, width: contentW, height: exampleH)
+        if let cv = exampleBox.contentView {
+            exampleLabel.frame = cv.bounds.insetBy(dx: 12, dy: 4)
+        }
+    }
+
+    private func layoutShortcutsBox() {
+        guard let cv = shortcutsBox.contentView else { return }
+        let inset: CGFloat = 10
+        headerLabel.frame = NSRect(x: inset, y: cv.bounds.height - 24, width: cv.bounds.width - inset * 2, height: 16)
+        addButton.frame = NSRect(x: inset, y: 8, width: 34, height: 26)
+        scrollView.frame = NSRect(
+            x: inset,
+            y: 42,
+            width: cv.bounds.width - inset * 2,
+            height: max(80, cv.bounds.height - 70)
+        )
+        layoutRows()
+    }
+
+    private func reloadRows() {
+        rowViews.forEach { $0.removeFromSuperview() }
+        rowViews = shortcuts.map { shortcut in
+            let row = ShortcutRuleRowView(shortcut: shortcut)
+            row.onChange = { [weak self] updated in
+                self?.update(updated)
+            }
+            row.onDelete = { [weak self] id in
+                self?.deleteShortcut(id)
+            }
+            row.onAdvanceFromKey = { [weak self] id in
+                self?.advanceFromKey(id)
+            }
+            row.onAdvanceFromValue = { [weak self] id in
+                self?.focusNextKey(after: id)
+            }
+            row.onEditingEnded = { [weak self] id in
+                self?.pruneEmptyShortcutIfInactive(id)
+            }
+            rowsContainer.addSubview(row)
+            return row
+        }
+        layoutRows()
+    }
+
+    private func layoutRows() {
+        let rowH: CGFloat = 38
+        let gap: CGFloat = 6
+        let totalH = max(scrollView.contentSize.height, CGFloat(rowViews.count) * (rowH + gap))
+        rowsContainer.frame = NSRect(x: 0, y: 0, width: scrollView.contentSize.width, height: totalH)
+
+        for (index, row) in rowViews.enumerated() {
+            let y = totalH - CGFloat(index + 1) * rowH - CGFloat(index) * gap
+            row.frame = NSRect(x: 0, y: y, width: rowsContainer.bounds.width, height: rowH)
+        }
+    }
+
+    private func persist() {
+        TranscriptProcessingSettings.shortcuts = shortcuts.filter { !Self.isEmpty($0) }
+    }
+
+    private func update(_ shortcut: TextShortcut) {
+        guard let index = shortcuts.firstIndex(where: { $0.id == shortcut.id }) else { return }
+        shortcuts[index] = shortcut
+        persist()
+    }
+
+    private func deleteShortcut(_ id: UUID) {
+        shortcuts.removeAll { $0.id == id }
+        persist()
+        reloadRows()
+    }
+
+    @objc private func enabledChanged(_ sender: NSButton) {
+        TranscriptProcessingSettings.shortcutsEnabled = sender.state == .on
+    }
+
+    @objc private func addShortcutTapped() {
+        addShortcutAndFocus()
+    }
+
+    private func addShortcutAndFocus() {
+        let shortcut = TextShortcut(match: "", replacement: "")
+        shortcuts.append(shortcut)
+        reloadRows()
+        focus(.key, for: shortcut.id)
+    }
+
+    private func advanceFromKey(_ id: UUID) {
+        if removeIfEmpty(id) {
+            return
+        }
+        focus(.value, for: id)
+    }
+
+    private func focusNextKey(after id: UUID) {
+        if removeIfEmpty(id) {
+            return
+        }
+
+        guard let index = shortcuts.firstIndex(where: { $0.id == id }) else {
+            addShortcutAndFocus()
+            return
+        }
+
+        let nextIndex = shortcuts.index(after: index)
+        guard nextIndex < shortcuts.endIndex else {
+            addShortcutAndFocus()
+            return
+        }
+
+        focus(.key, for: shortcuts[nextIndex].id)
+    }
+
+    private func pruneEmptyShortcutIfInactive(_ id: UUID) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard let row = self.rowViews.first(where: { $0.shortcutID == id }) else { return }
+            guard !row.containsFirstResponder(in: self.window) else { return }
+            _ = self.removeIfEmpty(id)
+        }
+    }
+
+    private func removeIfEmpty(_ id: UUID) -> Bool {
+        guard let index = shortcuts.firstIndex(where: { $0.id == id }),
+              Self.isEmpty(shortcuts[index]) else {
+            return false
+        }
+
+        shortcuts.remove(at: index)
+        persist()
+        reloadRows()
+        return true
+    }
+
+    private static func isEmpty(_ shortcut: TextShortcut) -> Bool {
+        shortcut.match.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            shortcut.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func focus(_ field: FocusField, for id: UUID) {
+        guard let row = rowViews.first(where: { $0.shortcutID == id }) else { return }
+        scrollView.documentView?.scroll(row.frame.origin)
+        DispatchQueue.main.async { [weak self, weak row] in
+            guard let self, let row else { return }
+            switch field {
+            case .key:
+                row.focusKey(in: self.window)
+            case .value:
+                row.focusValue(in: self.window)
+            }
+        }
+    }
+}
+
+private class ShortcutRuleRowView: NSView, NSTextFieldDelegate {
+    var onChange: ((TextShortcut) -> Void)?
+    var onDelete: ((UUID) -> Void)?
+    var onAdvanceFromKey: ((UUID) -> Void)?
+    var onAdvanceFromValue: ((UUID) -> Void)?
+    var onEditingEnded: ((UUID) -> Void)?
+
+    var shortcutID: UUID { shortcut.id }
+
+    private var shortcut: TextShortcut
+    private let checkbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let matchField = NSTextField()
+    private let replacementField = NSTextField()
+    private let deleteButton = NSButton(title: "", target: nil, action: nil)
+
+    init(shortcut: TextShortcut) {
+        self.shortcut = shortcut
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.cornerRadius = 6
+
+        checkbox.state = shortcut.isEnabled ? .on : .off
+        checkbox.target = self
+        checkbox.action = #selector(checkboxChanged(_:))
+        addSubview(checkbox)
+
+        matchField.placeholderString = "my email"
+        matchField.stringValue = shortcut.match
+        matchField.delegate = self
+        addSubview(matchField)
+
+        replacementField.placeholderString = "sam@example.com"
+        replacementField.stringValue = shortcut.replacement
+        replacementField.delegate = self
+        addSubview(replacementField)
+
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Delete")
+        deleteButton.bezelStyle = .inline
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteTapped)
+        addSubview(deleteButton)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let inset: CGFloat = 8
+        checkbox.frame = NSRect(x: inset, y: 9, width: 24, height: 20)
+        deleteButton.frame = NSRect(x: bounds.width - inset - 28, y: 5, width: 28, height: 28)
+
+        let fieldsX: CGFloat = 40
+        let gap: CGFloat = 8
+        let available = max(160, bounds.width - fieldsX - 44)
+        let fieldW = (available - gap) / 2
+        matchField.frame = NSRect(x: fieldsX, y: 6, width: fieldW, height: 24)
+        replacementField.frame = NSRect(x: fieldsX + fieldW + gap, y: 6, width: fieldW, height: 24)
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        shortcut.match = matchField.stringValue
+        shortcut.replacement = replacementField.stringValue
+        onChange?(shortcut)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        shortcut.match = matchField.stringValue
+        shortcut.replacement = replacementField.stringValue
+        onChange?(shortcut)
+        onEditingEnded?(shortcut.id)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.insertNewline(_:)) ||
+              commandSelector == #selector(NSResponder.insertTab(_:)) else {
+            return false
+        }
+
+        if control === matchField {
+            onAdvanceFromKey?(shortcut.id)
+        } else if control === replacementField {
+            onAdvanceFromValue?(shortcut.id)
+        }
+        return true
+    }
+
+    func focusKey(in window: NSWindow?) {
+        window?.makeFirstResponder(matchField)
+        matchField.currentEditor()?.selectAll(nil)
+    }
+
+    func focusValue(in window: NSWindow?) {
+        window?.makeFirstResponder(replacementField)
+        replacementField.currentEditor()?.selectAll(nil)
+    }
+
+    func containsFirstResponder(in window: NSWindow?) -> Bool {
+        guard let firstResponder = window?.firstResponder else { return false }
+        if firstResponder === matchField || firstResponder === replacementField {
+            return true
+        }
+        return firstResponder === matchField.currentEditor() ||
+            firstResponder === replacementField.currentEditor()
+    }
+
+    @objc private func checkboxChanged(_ sender: NSButton) {
+        shortcut.isEnabled = sender.state == .on
+        onChange?(shortcut)
+    }
+
+    @objc private func deleteTapped() {
+        onDelete?(shortcut.id)
+    }
+}
+
+// MARK: - Post Processing Tab
 
 private class CleanupTabView: NSView, NSTextViewDelegate {
     
     var onSettingsChanged: (() -> Void)?
     
-    private let titleLabel = NSTextField(labelWithString: "Text Cleanup")
-    private let subtitleLabel = NSTextField(labelWithString: "Use a local LLM to clean up transcriptions — removes filler words, fixes punctuation, and polishes text.")
+    private let titleLabel = NSTextField(labelWithString: "Post Processing")
+    private let subtitleLabel = NSTextField(labelWithString: "Use a local LLM after transcription to polish wording, punctuation, and recognition misses.")
     
-    private let enabledCheckbox = NSButton(checkboxWithTitle: "Enable text cleanup", target: nil, action: nil)
+    private let enabledCheckbox = NSButton(checkboxWithTitle: "Enable LLM post processing", target: nil, action: nil)
     
     private let modelBox = NSBox()
     private let modelNameLabel = NSTextField(labelWithString: "")
@@ -1775,7 +2418,7 @@ private class CleanupTabView: NSView, NSTextViewDelegate {
         addSubview(enabledCheckbox)
         
         // Model card box
-        modelBox.title = "Cleanup Model"
+        modelBox.title = "Post Processing Model"
         modelBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
         addSubview(modelBox)
         
@@ -1829,7 +2472,7 @@ private class CleanupTabView: NSView, NSTextViewDelegate {
         progressContainer.addSubview(progressLabel)
 
         // Prompt editor
-        promptBox.title = "Cleanup Prompt"
+        promptBox.title = "Post Processing Prompt"
         promptBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
         addSubview(promptBox)
 
@@ -2060,7 +2703,7 @@ private class CleanupTabView: NSView, NSTextViewDelegate {
     
     @objc private func deleteTapped() {
         let alert = NSAlert()
-        alert.messageText = "Delete Cleanup Model?"
+        alert.messageText = "Delete Post Processing Model?"
         alert.informativeText = "This will remove the downloaded model (\(CleanupModelDownloader.CleanupModel.qwen35_0_8b.estimatedSizeString)). You can re-download it anytime."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")

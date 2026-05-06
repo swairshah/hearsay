@@ -1,6 +1,12 @@
 <h1>  <img src="assets/icon_128.png" alt="Hearsay icon" width="30"/> Hearsay</h1>
 
-__Local speech-to-text for macOS__. __Uses Antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a>.__
+**[Download Hearsay 1.0.21 DMG](https://github.com/swairshah/hearsay/releases/download/v1.0.21/Hearsay-1.0.21.dmg)**
+
+Browse all [Releases](https://github.com/swairshah/hearsay/releases).
+
+__Local speech-to-text for macOS__.
+
+You can also install with Homebrew:
 
 ```bash
 brew install --cask swairshah/tap/hearsay
@@ -8,22 +14,15 @@ brew install --cask swairshah/tap/hearsay
 
 Hold Right Option to record, release to transcribe, auto-paste at cursor.
 
+Hearsay supports multiple local speech model backends:
+
+- Qwen3-ASR through Antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a>
+- Whisper models through WhisperKit
+- NVIDIA Parakeet models through FluidAudio
 
 ### Local models FTW.
 
 ![Demo](assets/demo.gif)
-
-## Install
-
-```bash
-brew install --cask swairshah/tap/hearsay
-```
-
-Or download the latest DMG directly:
-
-**[Download Hearsay 1.0.16 DMG](https://github.com/swairshah/hearsay/releases/download/v1.0.16/Hearsay-1.0.16.dmg)**
-
-You can also browse all [Releases](https://github.com/swairshah/hearsay/releases).
 
 ## Usage
 
@@ -39,9 +38,10 @@ Transcribed text is automatically pasted at your cursor and copied to clipboard.
 
 1. Grant **Microphone** permission when prompted
 2. Grant **Accessibility** permission (System Settings → Privacy & Security → Accessibility)
-3. Choose a model to download:
-   - **Fast (0.6B)** — 1.3 GB, quick transcription
-   - **Quality (1.7B)** — 3.4 GB, better accuracy
+3. Choose a speech model to download:
+   - **Qwen** — fast and quality local ASR options
+   - **Whisper** — local English transcription through WhisperKit
+   - **Parakeet** — local English and multilingual options through FluidAudio
 
 Models are stored in `~/Library/Application Support/Hearsay/Models/`
 

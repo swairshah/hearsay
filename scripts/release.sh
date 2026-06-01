@@ -23,6 +23,7 @@ APP_NAME="Hearsay"
 BUNDLE_ID="com.swair.hearsay"
 SCHEME="Hearsay"
 PARAKEET_HELPER_SCHEME="HearsayParakeetHelper"
+CLI_SCHEME="HearsayCLI"
 
 # Signing identity (adjust if different)
 SIGNING_IDENTITY="Developer ID Application: Swair Rajesh Shah (8B9YURJS4G)"
@@ -39,6 +40,7 @@ DMG_NAME="$APP_NAME"
 DMG_PATH="dist/$DMG_NAME.dmg"
 QWEN_ASR_BINARY="$HOME/work/misc/qwen-asr/qwen_asr"
 PARAKEET_HELPER_BINARY="build/Build/Products/Release/HearsayParakeetHelper"
+CLI_BINARY="build/Build/Products/Release/hearsay"
 
 # Parse arguments
 SKIP_NOTARIZE=false
@@ -121,6 +123,33 @@ if [ ! -f "$PARAKEET_HELPER_BINARY" ]; then
     exit 1
 fi
 
+# Build the CLI as a universal tool. It is bundled in the app's Resources folder,
+# and the Homebrew cask can expose it as /opt/homebrew/bin/hearsay.
+echo -e "${YELLOW}Building CLI...${NC}"
+xcodebuild -project Hearsay.xcodeproj \
+    -scheme "$CLI_SCHEME" \
+    -configuration Release \
+    -derivedDataPath build \
+    -destination 'generic/platform=macOS' \
+    -skipMacroValidation \
+    build \
+    ARCHS="arm64 x86_64" \
+    ONLY_ACTIVE_ARCH=NO \
+    CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+    DEVELOPMENT_TEAM="$TEAM_ID" \
+    CODE_SIGN_STYLE="Manual" \
+    2>&1 | tee /tmp/hearsay-cli-release.log | grep -E "(error:|warning:|BUILD|Build)" || true
+CLI_STATUS=${PIPESTATUS[0]}
+if [ "$CLI_STATUS" -ne 0 ]; then
+    echo -e "${RED}CLI build failed! Full log: /tmp/hearsay-cli-release.log${NC}"
+    exit "$CLI_STATUS"
+fi
+
+if [ ! -f "$CLI_BINARY" ]; then
+    echo -e "${RED}Error: CLI not found at $CLI_BINARY${NC}"
+    exit 1
+fi
+
 # Build Release
 echo -e "${YELLOW}Building Release configuration...${NC}"
 xcodebuild -project Hearsay.xcodeproj \
@@ -181,6 +210,13 @@ echo -e "${YELLOW}Bundling Parakeet helper...${NC}"
 cp "$PARAKEET_HELPER_BINARY" "$APP_PATH/Contents/MacOS/"
 chmod 755 "$APP_PATH/Contents/MacOS/HearsayParakeetHelper"
 
+# Bundle CLI in Resources to avoid a case-insensitive path collision with the
+# app executable at Contents/MacOS/Hearsay.
+echo -e "${YELLOW}Bundling CLI...${NC}"
+mkdir -p "$APP_PATH/Contents/Resources"
+cp "$CLI_BINARY" "$APP_PATH/Contents/Resources/hearsay"
+chmod 755 "$APP_PATH/Contents/Resources/hearsay"
+
 # Sign the bundled binaries
 echo -e "${YELLOW}Signing bundled binaries...${NC}"
 codesign --force --options runtime \
@@ -189,6 +225,9 @@ codesign --force --options runtime \
 codesign --force --options runtime \
     --sign "$SIGNING_IDENTITY" \
     "$APP_PATH/Contents/MacOS/HearsayParakeetHelper"
+codesign --force --options runtime \
+    --sign "$SIGNING_IDENTITY" \
+    "$APP_PATH/Contents/Resources/hearsay"
 
 # Re-sign the entire app (including nested code)
 echo -e "${YELLOW}Re-signing app bundle...${NC}"

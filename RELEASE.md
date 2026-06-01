@@ -26,6 +26,12 @@ Verify the release artifact:
 xcrun stapler validate dist/Hearsay-VERSION.dmg
 ```
 
+The release script bundles the CLI at:
+
+```bash
+Hearsay.app/Contents/Resources/hearsay
+```
+
 If it fails, check the log:
 ```bash
 xcrun notarytool log SUBMISSION_ID --keychain-profile "notarytool"
@@ -55,7 +61,9 @@ gh release create vVERSION dist/Hearsay-VERSION.dmg \
 # Get SHA
 shasum -a 256 dist/Hearsay-VERSION.dmg
 
-# Update ~/work/projects/homebrew-tap/Casks/hearsay.rb with new version and SHA
+# Update ~/work/projects/homebrew-tap/Casks/hearsay.rb with new version and SHA.
+# The cask should also expose the bundled CLI:
+# binary "#{appdir}/Hearsay.app/Contents/Resources/hearsay", target: "hearsay"
 
 cd ~/work/projects/homebrew-tap
 git add Casks/hearsay.rb

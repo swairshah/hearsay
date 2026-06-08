@@ -280,6 +280,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Resize window to fit new indicator width
             self.recordingWindow.positionOnScreen(width: self.recordingIndicator.idealWidth)
         }
+
+        // Set up clipboard manager callback — fires when text is copied during recording
+        ClipboardManager.shared.onClipCaptured = { [weak self] count in
+            guard let self = self else { return }
+            logger.info("Clipboard copy captured: count=\(count)")
+            self.recordingIndicator.clipCount = count
+            // Resize window to fit the new badge
+            self.recordingWindow.positionOnScreen(width: self.recordingIndicator.idealWidth)
+        }
     }
 
     private func setupLocalAPI() {
@@ -504,8 +513,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("Invalidating transcription ID, was: \(self.currentTranscriptionID?.uuidString ?? "nil")")
         currentTranscriptionID = nil
         
-        // Start screenshot session
+        // Start screenshot + clipboard sessions (both interleave into the transcript)
         ScreenshotManager.shared.startSession()
+        ClipboardManager.shared.startSession()
         hotkeyMonitor.enableScreenshotHotKey()
         
         // Recreate the panel each recording start to prevent occasional "invisible but visible=true" window state.
@@ -515,7 +525,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isToggleMode = hotkeyMonitor.state == .recordingToggle
         recordingIndicator.figureCount = 0
         recordingIndicator.showFigureCount = true  // Always show, screenshots work in both modes
-        
+        recordingIndicator.clipCount = 0
+        recordingIndicator.showClipCount = true    // Badge appears once a copy is captured
+
         logger.info("Setting indicator state to .recording and calling fadeIn")
         recordingIndicator.setState(.recording)
         recordingWindow.positionOnScreen(width: recordingIndicator.idealWidth)
@@ -552,12 +564,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SoundPlayer.shared.play(.recordingStop)
         statusBar.showRecordingState(false)
         
-        // End screenshot session and disable hotkey
+        // End screenshot + clipboard sessions and disable hotkey
         let figures = ScreenshotManager.shared.endSession()
+        let clips = ClipboardManager.shared.endSession()
         hotkeyMonitor.disableScreenshotHotKey()
         recordingIndicator.showFigureCount = false
-        
-        logger.info("Recording stopped with \(figures.count) screenshot(s)")
+        recordingIndicator.showClipCount = false
+
+        logger.info("Recording stopped with \(figures.count) screenshot(s), \(clips.count) clip(s)")
         
         // Stop recording and get audio file
         let stopResult = audioRecorder.stop()
@@ -599,11 +613,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Transcribe
         Task {
-            await transcribe(audioURL: audioURL, transcriptionID: transcriptionID, figures: figures)
+            await transcribe(audioURL: audioURL, transcriptionID: transcriptionID, figures: figures, clips: clips)
         }
     }
     
-    private func transcribe(audioURL: URL, transcriptionID: UUID, figures: [CapturedFigure] = []) async {
+    private func transcribe(audioURL: URL, transcriptionID: UUID, figures: [CapturedFigure] = [], clips: [CapturedClip] = []) async {
         guard let transcriber = transcriber else {
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): no model, checking if stale...")
@@ -625,8 +639,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let text: String
             
-            if figures.isEmpty {
-                // Simple case: no figures, just transcribe
+            if figures.isEmpty && clips.isEmpty {
+                // Simple case: nothing captured mid-recording, just transcribe
                 do {
                     text = try await transcriber.transcribe(audioURL: audioURL)
                 } catch SpeechTranscriptionError.noOutput {
@@ -665,38 +679,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             } else {
-                // Interleaved case: split audio at figure timestamps and transcribe each segment
-                let timestamps = ScreenshotManager.shared.getSplitTimestamps(figures: figures)
+                // Interleaved case: weave screenshots and copied text into the transcript
+                // at the points they occurred. Split audio at the combined timeline.
+                let timeline = TranscriptInterleaver.buildTimeline(figures: figures, clips: clips)
+                let timestamps = TranscriptInterleaver.splitTimestamps(for: timeline)
                 logger.info("Splitting audio at timestamps: \(timestamps)")
-                
+
                 if let segments = AudioSplitter.splitWAV(at: audioURL, timestamps: timestamps) {
                     logger.info("Audio split into \(segments.count) segments")
                     var transcripts: [String] = []
-                    
+
                     for (index, segment) in segments.enumerated() {
                         do {
                             let segmentText = try await transcriber.transcribe(audioURL: segment)
                             transcripts.append(segmentText)
                         } catch SpeechTranscriptionError.noOutput {
-                            // Short/silent segment is expected sometimes when splitting at screenshot boundaries.
-                            // Keep placeholder so figure interleaving alignment remains correct.
+                            // Short/silent segment is expected sometimes when splitting at
+                            // insertion boundaries. Keep placeholder so alignment stays correct.
                             logger.info("Segment \(index) produced no transcription output; continuing")
                             transcripts.append("")
                         }
                     }
-                    
+
                     // Clean up segment files
                     AudioSplitter.cleanupSegments(segments)
-                    
-                    // Format with interleaved figure references
-                    text = ScreenshotManager.shared.formatInterleavedTranscription(transcripts, figures: figures)
+
+                    // Interleave figure references and clip placeholders.
+                    text = TranscriptInterleaver.interleave(segments: transcripts, timeline: timeline)
                 } else {
-                    // Fallback: couldn't split, transcribe whole file
+                    // Fallback: couldn't split. Transcribe whole file, then append clip
+                    // placeholders and a figure footer (positions are lost without a split).
                     logger.warning("Failed to split audio, transcribing whole file")
                     let rawText = try await transcriber.transcribe(audioURL: audioURL)
-                    // Simple format with figures at end
-                    let figurePaths = figures.enumerated().map { "Figure \($0.offset + 1): \($0.element.url.path)" }.joined(separator: "\n")
-                    text = rawText + (figures.isEmpty ? "" : "\n\n\(figurePaths)")
+                    var body = rawText
+                    for index in clips.indices {
+                        body += " " + TranscriptInterleaver.clipPlaceholder(index)
+                    }
+                    let footer = TranscriptInterleaver.figureFooter(for: timeline)
+                    text = footer.isEmpty ? body : body + "\n\n" + footer
                 }
             }
             
@@ -715,8 +735,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 postProcessedText = text
             }
 
-            let finalText = TranscriptProcessor.process(postProcessedText)
-            
+            // Swap clip placeholders for the verbatim copied text AFTER all cleanup,
+            // so copied content (code, names) is reproduced exactly.
+            let processedText = TranscriptProcessor.process(postProcessedText)
+            let finalText = TranscriptInterleaver.substituteClips(processedText, clips: clips)
+
             await MainActor.run {
                 logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
                 guard self.currentTranscriptionID == transcriptionID else {
@@ -1132,8 +1155,10 @@ extension AppDelegate: HearsayLocalAPIServerDelegate {
             statusBar.showRecordingState(false)
             _ = audioRecorder.stop()
             _ = ScreenshotManager.shared.endSession()
+            _ = ClipboardManager.shared.endSession()
             hotkeyMonitor.disableScreenshotHotKey()
             recordingIndicator.showFigureCount = false
+            recordingIndicator.showClipCount = false
         }
 
         if isTranscribing {

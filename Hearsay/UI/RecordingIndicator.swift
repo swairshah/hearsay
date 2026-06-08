@@ -29,12 +29,28 @@ final class RecordingIndicator: NSView {
             needsLayout = true
         }
     }
-    
+
+    /// Number of clipboard copies captured in current session
+    var clipCount: Int = 0 {
+        didSet {
+            clipCountView.count = clipCount
+            needsLayout = true
+        }
+    }
+
+    /// Whether to show the clipboard count badge
+    var showClipCount: Bool = false {
+        didSet {
+            needsLayout = true
+        }
+    }
+
     // UI Elements
     private let pillBackground = CALayer()
     private let waveformView = WaveformView()
     private let dotsView = AnimatedDotsView()
     private let figureCountView = FigureCountView()
+    private let clipCountView = ClipCountView()
     private let checkmarkView = CheckmarkView()
     
     // Audio level (0-1)
@@ -68,23 +84,29 @@ final class RecordingIndicator: NSView {
         addSubview(waveformView)
         addSubview(dotsView)
         addSubview(figureCountView)
+        addSubview(clipCountView)
         addSubview(checkmarkView)
-        
+
         dotsView.isHidden = true
         figureCountView.isHidden = true
+        clipCountView.isHidden = true
         checkmarkView.isHidden = true
     }
     
     /// Calculate ideal width based on current state
     var idealWidth: CGFloat {
         let pillWidth = Constants.indicatorWidth
-        let figureCountWidth = figureCountView.idealWidth
+        guard case .recording = state else { return pillWidth }
+
         let spacing: CGFloat = 8
-        
-        if case .recording = state, showFigureCount && figureCount > 0 {
-            return pillWidth + spacing + figureCountWidth
+        var width = pillWidth
+        if showFigureCount && figureCount > 0 {
+            width += spacing + figureCountView.idealWidth
         }
-        return pillWidth
+        if showClipCount && clipCount > 0 {
+            width += spacing + clipCountView.idealWidth
+        }
+        return width
     }
     
     override func layout() {
@@ -104,18 +126,37 @@ final class RecordingIndicator: NSView {
         } else {
             isRecording = false
         }
-        
-        // Position pill background (always on the left)
-        pillBackground.frame = NSRect(x: 0, y: 0, width: pillWidth, height: pillHeight)
+
+        // Clipboard badge sits to the LEFT of the pill; when shown, the pill (and
+        // everything inside it) shifts right by the badge width.
+        let clipWidth = clipCountView.idealWidth
+        let showClip = showClipCount && isRecording && clipCount > 0
+        let pillX: CGFloat = showClip ? (clipWidth + spacing) : 0
+
+        // Position pill background
+        pillBackground.frame = NSRect(x: pillX, y: 0, width: pillWidth, height: pillHeight)
         pillBackground.cornerRadius = pillHeight / 2
-        
+
+        // Position clipboard badge on the far left
+        if showClip {
+            clipCountView.frame = NSRect(
+                x: 0,
+                y: (pillHeight - contentHeight) / 2,
+                width: clipWidth,
+                height: contentHeight
+            )
+            clipCountView.isHidden = false
+        } else {
+            clipCountView.isHidden = true
+        }
+
         let checkmarkSize: CGFloat = 18
-        
+
         switch state {
         case .recording, .error:
             // Center waveform inside the pill
             waveformView.frame = NSRect(
-                x: (pillWidth - waveformWidth) / 2,
+                x: pillX + (pillWidth - waveformWidth) / 2,
                 y: (pillHeight - contentHeight) / 2,
                 width: waveformWidth,
                 height: contentHeight
@@ -123,11 +164,11 @@ final class RecordingIndicator: NSView {
             waveformView.isHidden = false
             dotsView.isHidden = true
             checkmarkView.isHidden = true
-            
-            // Position figure count outside the pill (to the right)
+
+            // Position figure (screenshot) count outside the pill, to the right.
             if showFigureCount && isRecording && figureCount > 0 {
                 figureCountView.frame = NSRect(
-                    x: pillWidth + spacing,
+                    x: pillX + pillWidth + spacing,
                     y: (pillHeight - contentHeight) / 2,
                     width: figureCountWidth,
                     height: contentHeight
@@ -136,27 +177,27 @@ final class RecordingIndicator: NSView {
             } else {
                 figureCountView.isHidden = true
             }
-            
+
         case .done:
             // Show green checkmark centered inside the pill
             waveformView.isHidden = true
             dotsView.isHidden = true
             figureCountView.isHidden = true
             checkmarkView.frame = NSRect(
-                x: (pillWidth - checkmarkSize) / 2,
+                x: pillX + (pillWidth - checkmarkSize) / 2,
                 y: (pillHeight - checkmarkSize) / 2,
                 width: checkmarkSize,
                 height: checkmarkSize
             )
             checkmarkView.isHidden = false
-            
+
         case .transcribing:
             // Just show dots centered inside the pill
             waveformView.isHidden = true
             figureCountView.isHidden = true
             checkmarkView.isHidden = true
             dotsView.frame = NSRect(
-                x: (pillWidth - dotsWidth) / 2,
+                x: pillX + (pillWidth - dotsWidth) / 2,
                 y: (pillHeight - contentHeight) / 2,
                 width: dotsWidth,
                 height: contentHeight
@@ -555,6 +596,84 @@ private class FigureCountView: NSView {
             lineLayers[i].frame = NSRect(x: x + borderWidth, y: lineY, width: lineWidth, height: lineHeight)
             x += totalLineWidth + lineSpacing
         }
+    }
+}
+
+// MARK: - Clip Count View
+
+/// Displays a clipboard icon plus the number of copies captured during recording.
+/// Sits outside the pill to the right, on its own dark badge so it stays legible
+/// against the transparent area. Visual: 📋 2
+private class ClipCountView: NSView {
+
+    var count: Int = 0 {
+        didSet {
+            countLabel.stringValue = "\(count)"
+            countLabel.sizeToFit()
+            needsLayout = true
+        }
+    }
+
+    private let badgeLayer = CALayer()
+    private let iconView = NSImageView()
+    private let countLabel = NSTextField(labelWithString: "0")
+
+    private let horizontalPadding: CGFloat = 6
+    private let iconSize: CGFloat = 12
+    private let iconTextGap: CGFloat = 3
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+
+        badgeLayer.backgroundColor = NSColor(white: 0.1, alpha: 0.95).cgColor
+        layer?.addSublayer(badgeLayer)
+
+        let config = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .semibold)
+        iconView.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Clipboard copies")?
+            .withSymbolConfiguration(config)
+        iconView.contentTintColor = .white
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(iconView)
+
+        countLabel.font = .systemFont(ofSize: 11, weight: .bold)
+        countLabel.textColor = .white
+        countLabel.backgroundColor = .clear
+        countLabel.isBordered = false
+        countLabel.isEditable = false
+        countLabel.sizeToFit()
+        addSubview(countLabel)
+    }
+
+    /// Width needed to show the badge; 0 when there is nothing to show.
+    var idealWidth: CGFloat {
+        guard count > 0 else { return 0 }
+        return horizontalPadding + iconSize + iconTextGap + ceil(countLabel.frame.width) + horizontalPadding
+    }
+
+    override func layout() {
+        super.layout()
+
+        badgeLayer.frame = bounds
+        badgeLayer.cornerRadius = bounds.height / 2
+
+        let iconY = (bounds.height - iconSize) / 2
+        iconView.frame = NSRect(x: horizontalPadding, y: iconY, width: iconSize, height: iconSize)
+
+        let textWidth = ceil(countLabel.frame.width)
+        let textHeight = ceil(countLabel.frame.height)
+        let textX = horizontalPadding + iconSize + iconTextGap
+        let textY = (bounds.height - textHeight) / 2
+        countLabel.frame = NSRect(x: textX, y: textY, width: textWidth, height: textHeight)
     }
 }
 

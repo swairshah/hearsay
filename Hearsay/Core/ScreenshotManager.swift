@@ -113,47 +113,5 @@ final class ScreenshotManager {
         }
     }
     
-    // MARK: - Text Formatting
-    
-    /// Format interleaved transcription segments with figure references
-    /// Input: ["Hello this is", "the second part", "and the end"], figures
-    /// Output: "Hello this is [Figure 1] the second part [Figure 2] and the end\n\nFigure 1: /path/to/figure-1.png\nFigure 2: /path/to/figure-2.png"
-    func formatInterleavedTranscription(_ segments: [String], figures: [CapturedFigure]) -> String {
-        guard !figures.isEmpty else {
-            return segments.joined(separator: " ")
-        }
-        
-        var result = ""
-        
-        // Interleave segments with figure references
-        for (index, segment) in segments.enumerated() {
-            let trimmed = segment.trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty {
-                if !result.isEmpty && !result.hasSuffix(" ") {
-                    result += " "
-                }
-                result += trimmed
-            }
-            
-            // Add figure reference after this segment (if there is one)
-            if index < figures.count {
-                if !result.isEmpty {
-                    result += " "
-                }
-                result += "[Figure \(index + 1)]"
-            }
-        }
-        
-        // Build figure paths footer
-        let figurePaths = figures.enumerated().map { index, figure in
-            "Figure \(index + 1): \(figure.url.path)"
-        }.joined(separator: "\n")
-        
-        return "\(result)\n\n\(figurePaths)"
-    }
-    
-    /// Get timestamps for splitting audio (in seconds)
-    func getSplitTimestamps(figures: [CapturedFigure]) -> [TimeInterval] {
-        return figures.map { $0.timestamp }
-    }
+    // Transcript interleaving (figures + clips) lives in `TranscriptInterleaver`.
 }

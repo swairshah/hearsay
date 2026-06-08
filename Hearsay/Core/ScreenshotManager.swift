@@ -61,17 +61,29 @@ final class ScreenshotManager {
     
     // MARK: - Screenshot Capture
     
-    /// Capture a screenshot interactively (user selects region)
-    /// Records the timestamp relative to session start for interleaving with transcript
+    /// Capture a screenshot interactively (user selects a region).
+    /// Records the timestamp relative to session start for interleaving with transcript.
     func captureScreenshot() {
+        capture(interactive: true)
+    }
+
+    /// Capture the entire main display immediately (no region selection).
+    /// Records the timestamp relative to session start for interleaving with transcript.
+    func captureFullScreen() {
+        capture(interactive: false)
+    }
+
+    /// Shared capture implementation. `interactive` adds `-i` (region select);
+    /// otherwise `screencapture` grabs the whole main display right away.
+    private func capture(interactive: Bool) {
         let figureNumber = currentSessionFigures.count + 1
         let dateString = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "T", with: "_")
-        
+
         let filename = "figure-\(figureNumber)-\(dateString).png"
         let outputURL = Constants.figuresDirectory.appendingPathComponent(filename)
-        
+
         // Calculate timestamp relative to session start
         let captureTimestamp: TimeInterval
         if let startTime = sessionStartTime {
@@ -79,23 +91,24 @@ final class ScreenshotManager {
         } else {
             captureTimestamp = 0
         }
-        
-        screenshotLogger.info("Starting interactive screenshot capture -> \(outputURL.path) at \(captureTimestamp)s")
-        
-        // Use screencapture command with interactive selection
-        // -i = interactive mode (select area)
+
+        let mode = interactive ? "interactive" : "full-screen"
+        screenshotLogger.info("Starting \(mode) screenshot capture -> \(outputURL.path) at \(captureTimestamp)s")
+
+        // screencapture flags:
+        // -i = interactive mode (select area); omitted = capture whole main display
         // -x = no sound
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-i", "-x", outputURL.path]
-        
+        process.arguments = interactive ? ["-i", "-x", outputURL.path] : ["-x", outputURL.path]
+
         do {
             try process.run()
-            
+
             // Wait for completion in background
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 process.waitUntilExit()
-                
+
                 DispatchQueue.main.async {
                     if process.terminationStatus == 0 && FileManager.default.fileExists(atPath: outputURL.path) {
                         let figure = CapturedFigure(url: outputURL, timestamp: captureTimestamp)

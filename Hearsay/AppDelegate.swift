@@ -734,15 +734,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Get audio duration for history
         let audioDuration = getAudioDuration(url: audioURL)
-        
-        do {
-            let text: String
-            
-            if figures.isEmpty && clips.isEmpty {
-                // Simple case: nothing captured mid-recording, just transcribe
-                do {
-                    text = try await transcriber.transcribe(audioURL: audioURL)
-                } catch SpeechTranscriptionError.noOutput {
+
+        // Attempt transcription, auto-retrying once on a hard failure (transient model
+        // errors happen). Empty-output is already retried inside computeTranscript.
+        var output: TranscriptionOutput? = nil
+        var lastError: Error? = nil
+        for attempt in 1...2 {
+            do {
+                output = try await computeTranscript(audioURL: audioURL, figures: figures, clips: clips, audioDuration: audioDuration, transcriptionID: transcriptionID, transcriber: transcriber)
+                break
+            } catch {
+                lastError = error
+                logger.warning("Transcription \(transcriptionID.uuidString.prefix(8)): attempt \(attempt) failed: \(error.localizedDescription)")
+                if attempt == 1 {
+                    diagnosticLog.event("transcription.auto_retry", level: .warning, fields: [
+                        "id": String(transcriptionID.uuidString.prefix(8)),
+                        "reason": "hard_failure"
+                    ])
+                }
+            }
+        }
+
+        if let output = output {
+            await MainActor.run {
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
+                guard self.currentTranscriptionID == transcriptionID else {
+                    logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping delivery")
+                    diagnosticLog.event("transcription.stale", level: .warning, fields: [
+                        "id": String(transcriptionID.uuidString.prefix(8)),
+                        "phase": "delivery"
+                    ])
+                    return
+                }
+
+                switch self.activeDictationMode {
+                case .pasteAtCursor:
+                    self.deliverTranscriptToFocusedApp(output.finalText)
+                case .returnToCaller(let requestId):
+                    self.localAPIServer?.publishResult(
+                        .completed(requestId: requestId, text: output.finalText, durationSeconds: audioDuration)
+                    )
+                    SoundPlayer.shared.play(.paste)
+                }
+
+                // In dev mode, preserve the audio recording
+                var savedAudioPath: String? = nil
+                if Self.isDevMode {
+                    savedAudioPath = self.preserveRecording(audioURL: audioURL)
+                }
+
+                // Save to history
+                HistoryStore.shared.add(text: output.finalText, durationSeconds: audioDuration, audioFilePath: savedAudioPath)
+                diagnosticLog.event("transcription.success", fields: [
+                    "id": String(transcriptionID.uuidString.prefix(8)),
+                    "duration_seconds": String(format: "%.2f", audioDuration),
+                    "raw_length": "\(output.raw.count)",
+                    "processed_length": "\(output.postProcessed.count)",
+                    "final_length": "\(output.finalText.count)",
+                    "delivery": self.activeDictationMode.diagnosticName
+                ])
+
+                self.clearActiveDictationSession()
+
+                // Show success
+                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing done and scheduling dismiss")
+                self.recordingIndicator.setState(.done)
+                self.dismissIndicatorAfterDelay()
+            }
+            logger.info("Transcription complete; output length: \(output.raw.count)")
+        } else {
+            await MainActor.run {
+                self.handleTranscriptionFailure(audioURL: audioURL, audioDuration: audioDuration, transcriptionID: transcriptionID, error: lastError)
+            }
+            logger.error("Transcription error: \(lastError?.localizedDescription ?? "unknown")")
+        }
+
+        // Clean up temp file (a copy has already been preserved on failure)
+        try? FileManager.default.removeItem(at: audioURL)
+    }
+
+    private struct TranscriptionOutput {
+        let raw: String
+        let postProcessed: String
+        let finalText: String
+    }
+
+    /// Run the full transcription pipeline (split/interleave + post-processing) and
+    /// return the produced text. Reused by the initial attempt, the auto-retry, and the
+    /// manual retry of a saved failed recording. Throws on failure.
+    private func computeTranscript(audioURL: URL, figures: [CapturedFigure], clips: [CapturedClip], audioDuration: Double, transcriptionID: UUID, transcriber: any SpeechTranscribing) async throws -> TranscriptionOutput {
+        let text: String
+
+        if figures.isEmpty && clips.isEmpty {
+            // Simple case: nothing captured mid-recording, just transcribe
+            do {
+                text = try await transcriber.transcribe(audioURL: audioURL)
+            } catch SpeechTranscriptionError.noOutput {
                     // qwen_asr can intermittently return empty output.
                     // Retry once before fallback.
                     logger.warning("No transcription output on first attempt, retrying once")
@@ -874,83 +961,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Swap clip placeholders for the verbatim copied text AFTER all cleanup,
             // so copied content (code, names) is reproduced exactly.
+            // Swap clip placeholders for the verbatim copied text AFTER all cleanup,
+            // so copied content (code, names) is reproduced exactly.
             let processedText = TranscriptProcessor.process(postProcessedText)
             let finalText = TranscriptInterleaver.substituteClips(processedText, clips: clips)
+            return TranscriptionOutput(raw: text, postProcessed: postProcessedText, finalText: finalText)
+    }
 
-            await MainActor.run {
-                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): SUCCESS, checking if stale...")
-                guard self.currentTranscriptionID == transcriptionID else {
-                    logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping delivery")
-                    diagnosticLog.event("transcription.stale", level: .warning, fields: [
-                        "id": String(transcriptionID.uuidString.prefix(8)),
-                        "phase": "delivery"
-                    ])
-                    return
-                }
-
-                switch self.activeDictationMode {
-                case .pasteAtCursor:
-                    self.deliverTranscriptToFocusedApp(finalText)
-                case .returnToCaller(let requestId):
-                    self.localAPIServer?.publishResult(
-                        .completed(requestId: requestId, text: finalText, durationSeconds: audioDuration)
-                    )
-                    SoundPlayer.shared.play(.paste)
-                }
-                
-                // In dev mode, preserve the audio recording
-                var savedAudioPath: String? = nil
-                if Self.isDevMode {
-                    savedAudioPath = self.preserveRecording(audioURL: audioURL)
-                }
-                
-                // Save to history
-                HistoryStore.shared.add(text: finalText, durationSeconds: audioDuration, audioFilePath: savedAudioPath)
-                diagnosticLog.event("transcription.success", fields: [
-                    "id": String(transcriptionID.uuidString.prefix(8)),
-                    "duration_seconds": String(format: "%.2f", audioDuration),
-                    "raw_length": "\(text.count)",
-                    "processed_length": "\(postProcessedText.count)",
-                    "final_length": "\(finalText.count)",
-                    "delivery": self.activeDictationMode.diagnosticName
-                ])
-
-                self.clearActiveDictationSession()
-                
-                // Show success
-                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing done and scheduling dismiss")
-                self.recordingIndicator.setState(.done)
-                
-                // Dismiss after delay
-                self.dismissIndicatorAfterDelay()
-            }
-            
-            logger.info("Transcription complete; output length: \(text.count)")
-            
-        } catch {
-            await MainActor.run {
-                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): ERROR, checking if stale...")
-                guard self.currentTranscriptionID == transcriptionID else {
-                    logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
-                    diagnosticLog.event("transcription.stale", level: .warning, fields: [
-                        "id": String(transcriptionID.uuidString.prefix(8)),
-                        "phase": "error"
-                    ])
-                    return
-                }
-                logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing error and scheduling dismiss")
-                var fields = diagnosticLog.errorFields(for: error)
-                fields["id"] = String(transcriptionID.uuidString.prefix(8))
-                diagnosticLog.event("transcription.failed", level: .error, fields: fields)
-                self.recordingIndicator.setState(.error("Failed"))
-                self.scheduleIndicatorDismiss(after: 2.0)
-                self.failActiveCallerDictation(error.localizedDescription)
-            }
-            logger.error("Transcription error: \(error.localizedDescription)")
+    /// Handle a transcription that failed even after the auto-retry: preserve the
+    /// audio so nothing is lost, and (for normal dictation) record a failed history
+    /// entry the user can retry later from the History window.
+    @MainActor
+    private func handleTranscriptionFailure(audioURL: URL, audioDuration: Double, transcriptionID: UUID, error: Error?) {
+        logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): ERROR, checking if stale...")
+        guard self.currentTranscriptionID == transcriptionID else {
+            logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): STALE (current: \(self.currentTranscriptionID?.uuidString ?? "nil")), skipping UI update")
+            diagnosticLog.event("transcription.stale", level: .warning, fields: [
+                "id": String(transcriptionID.uuidString.prefix(8)),
+                "phase": "error"
+            ])
+            return
         }
-        
-        // Clean up temp file
-        try? FileManager.default.removeItem(at: audioURL)
+        logger.info("Transcription \(transcriptionID.uuidString.prefix(8)): showing error and scheduling dismiss")
+        if let error = error {
+            var fields = diagnosticLog.errorFields(for: error)
+            fields["id"] = String(transcriptionID.uuidString.prefix(8))
+            diagnosticLog.event("transcription.failed", level: .error, fields: fields)
+        }
+
+        // Preserve the recording so it isn't wasted; record a retryable entry.
+        let isPasteMode: Bool
+        if case .pasteAtCursor = self.activeDictationMode { isPasteMode = true } else { isPasteMode = false }
+        if isPasteMode, let savedPath = self.preserveRecording(audioURL: audioURL) {
+            HistoryStore.shared.add(text: "", durationSeconds: audioDuration, audioFilePath: savedPath, failed: true)
+            logger.info("Saved failed recording for retry: \(savedPath)")
+            diagnosticLog.event("transcription.failed_audio_saved", level: .warning, fields: [
+                "id": String(transcriptionID.uuidString.prefix(8))
+            ])
+        }
+
+        self.recordingIndicator.setState(.error("Failed"))
+        self.scheduleIndicatorDismiss(after: 2.0)
+        self.failActiveCallerDictation(error?.localizedDescription ?? "Transcription failed")
+    }
+
+    /// Re-run transcription on a saved failed recording and, on success, update the
+    /// history entry in place. Transcribes the whole file (figure positions aren't
+    /// persisted, so retries recover the spoken text without figure interleaving).
+    func retryFailedTranscription(_ item: TranscriptionItem, completion: @escaping (Bool) -> Void) {
+        guard let path = item.audioFilePath, FileManager.default.fileExists(atPath: path) else {
+            logger.warning("Retry requested but audio missing for item \(item.id)")
+            completion(false)
+            return
+        }
+        if transcriber == nil { _ = configureTranscriberIfAvailable() }
+        guard let transcriber = transcriber else {
+            completion(false)
+            return
+        }
+
+        let audioURL = URL(fileURLWithPath: path)
+        let duration = item.durationSeconds
+        let retryID = UUID()
+        Task {
+            do {
+                let output = try await computeTranscript(audioURL: audioURL, figures: [], clips: [], audioDuration: duration, transcriptionID: retryID, transcriber: transcriber)
+                await MainActor.run {
+                    HistoryStore.shared.update(item.updating(text: output.finalText, failed: nil))
+                    completion(true)
+                }
+                logger.info("Retry succeeded for item \(item.id)")
+            } catch {
+                logger.error("Retry transcription failed: \(error.localizedDescription)")
+                await MainActor.run { completion(false) }
+            }
+        }
     }
 
     private var currentDictationState: DictationState {
@@ -1104,10 +1189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         do {
             try FileManager.default.copyItem(at: audioURL, to: destURL)
-            logger.info("Dev mode: saved recording to \(destURL.path)")
+            logger.info("Saved recording to \(destURL.path)")
             return destURL.path
         } catch {
-            logger.error("Dev mode: failed to save recording: \(error.localizedDescription)")
+            logger.error("Failed to save recording: \(error.localizedDescription)")
             return nil
         }
     }
@@ -1307,6 +1392,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showHistory() {
         if historyWindowController == nil {
             historyWindowController = HistoryWindowController()
+            historyWindowController?.onRetry = { [weak self] item, completion in
+                self?.retryFailedTranscription(item, completion: completion)
+            }
         }
         historyWindowController?.showWindow()
     }

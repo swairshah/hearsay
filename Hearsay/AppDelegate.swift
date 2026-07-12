@@ -27,7 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var transcriber: (any SpeechTranscribing)?
     private let cleanupManager = TextCleanupManager()
     private var localAPIServer: HearsayLocalAPIServer?
-    private var historyWindowController: HistoryWindowController?
     private var onboardingWindowController: OnboardingWindowController?
     private var settingsWindowController: SettingsWindowController?
     
@@ -1404,13 +1403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Windows
     
     private func showHistory() {
-        if historyWindowController == nil {
-            historyWindowController = HistoryWindowController()
-            historyWindowController?.onRetry = { [weak self] item, completion in
-                self?.retryFailedTranscription(item, completion: completion)
-            }
-        }
-        historyWindowController?.showWindow()
+        ensureSettingsWindowController().show(tab: .history)
     }
     
     private func ensureSettingsWindowController() -> SettingsWindowController {
@@ -1442,6 +1435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if hasTranscriber {
                 self.prewarmActiveTranscriber()
             }
+        }
+        controller.onRetryTranscription = { [weak self] item, completion in
+            self?.retryFailedTranscription(item, completion: completion)
         }
         controller.onCleanupSettingsChanged = { [weak self] in
             guard let self = self else { return }

@@ -33,7 +33,7 @@ final class StatusBarController {
         setupMenu()
         
         // Listen for history changes
-        HistoryStore.shared.onHistoryChanged = { [weak self] in
+        HistoryStore.shared.addChangeObserver { [weak self] in
             self?.updateHistorySubmenu()
         }
     }

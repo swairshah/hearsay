@@ -22,6 +22,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onWindowClosed: (() -> Void)?
     var onModelChanged: (() -> Void)?
     var onCleanupSettingsChanged: (() -> Void)?
+    /// Re-run a failed transcription (provided by AppDelegate); calls back with success.
+    var onRetryTranscription: ((TranscriptionItem, @escaping (Bool) -> Void) -> Void)?
     
     private let tabView = NSTabView()
     private var settingsTab: SettingsTabView!
@@ -69,6 +71,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         
         // History tab
         historyTab = HistoryTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
+        historyTab.onRetry = { [weak self] item, completion in
+            if let handler = self?.onRetryTranscription {
+                handler(item, completion)
+            } else {
+                completion(false)
+            }
+        }
         let historyItem = NSTabViewItem(identifier: "history")
         historyItem.label = "History"
         historyItem.view = historyTab
@@ -1630,14 +1639,24 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
     private let clearButton = NSButton(title: "Clear All", target: nil, action: nil)
-    private let copyHintLabel = NSTextField(labelWithString: "Double-click a line to copy it.")
+    private let copyHintLabel = NSTextField(labelWithString: HistoryTabView.defaultHint)
     private let emptyLabel = NSTextField(labelWithString: "No transcriptions yet")
     
+    private static let defaultHint = "Click a line to copy it."
+    
     private var items: [TranscriptionItem] = []
+    private var retryingIds = Set<UUID>()
+    
+    /// Re-run a failed transcription. Provided by the window controller.
+    var onRetry: ((TranscriptionItem, @escaping (Bool) -> Void) -> Void)?
     
     override init(frame: NSRect) {
         super.init(frame: frame)
         setupUI()
+        // Keep the list in sync while the window is open (new dictations, retries).
+        HistoryStore.shared.addChangeObserver { [weak self] in
+            self?.refresh()
+        }
     }
     
     required init?(coder: NSCoder) { fatalError() }
@@ -1648,7 +1667,7 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
         tableView.dataSource = self
         tableView.headerView = nil
         tableView.rowHeight = 52
-        tableView.doubleAction = #selector(copySelected(_:))
+        tableView.action = #selector(rowClicked(_:))
         tableView.target = self
         
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("text"))
@@ -1728,15 +1747,22 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
         
         let cell = NSView()
         
-        let previewText = compactDisplayText(item.text)
-        let text = NSTextField(labelWithString: previewText)
+        let text: NSTextField
+        if item.isFailed {
+            let isRetrying = retryingIds.contains(item.id)
+            text = NSTextField(labelWithString: isRetrying ? "⏳ Retrying…" : "⚠️ Transcription failed — click to retry")
+            text.textColor = .systemOrange
+            text.toolTip = "Transcription failed. The audio was saved — click this row to run it again."
+        } else {
+            text = NSTextField(labelWithString: compactDisplayText(item.text))
+            text.toolTip = item.text
+        }
         text.font = .systemFont(ofSize: 12)
         text.lineBreakMode = .byTruncatingTail
         text.maximumNumberOfLines = 1
         text.cell?.lineBreakMode = .byTruncatingTail
         text.cell?.usesSingleLineMode = true
         text.cell?.wraps = false
-        text.toolTip = item.text
         cell.addSubview(text)
         
         let time = NSTextField(labelWithString: item.formattedTime)
@@ -1795,11 +1821,73 @@ private class HistoryTabView: NSView, NSTableViewDataSource, NSTableViewDelegate
         }
     }
     
-    @objc private func copySelected(_ sender: Any) {
-        let row = tableView.selectedRow
-        guard row >= 0 else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(items[row].text, forType: .string)
+    @objc private func rowClicked(_ sender: Any) {
+        let row = tableView.clickedRow
+        guard row >= 0, row < items.count else { return }
+        let item = items[row]
+        if item.isFailed {
+            retryItem(item)
+        } else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(item.text, forType: .string)
+            showCopiedFeedback(forRow: row)
+        }
+    }
+    
+    /// Re-run a failed item's transcription; the row shows a retrying state meanwhile.
+    private func retryItem(_ item: TranscriptionItem) {
+        guard let onRetry = onRetry, !retryingIds.contains(item.id) else { return }
+        retryingIds.insert(item.id)
+        tableView.reloadData()
+        onRetry(item) { [weak self] success in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.retryingIds.remove(item.id)
+                self.copyHintLabel.stringValue = success ? Self.defaultHint : "Retry failed — click the row to try again."
+                self.refresh()  // on success the store observer also fires; harmless
+            }
+        }
+    }
+    
+    /// Small "Copied ✓" pill that appears over the clicked row, floats up, and fades out.
+    private func showCopiedFeedback(forRow row: Int) {
+        let label = NSTextField(labelWithString: "Copied ✓")
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.alignment = .center
+        label.sizeToFit()
+        
+        let pill = NSView(frame: NSRect(x: 0, y: 0, width: label.frame.width + 20, height: label.frame.height + 8))
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        pill.layer?.cornerRadius = pill.frame.height / 2
+        label.frame.origin = NSPoint(x: 10, y: 4)
+        pill.addSubview(label)
+        
+        // Position over the right edge of the clicked row (accounts for scroll offset).
+        let rowRect = convert(tableView.rect(ofRow: row), from: tableView)
+        pill.frame.origin = NSPoint(
+            x: scrollView.frame.maxX - pill.frame.width - 24,
+            y: rowRect.midY - pill.frame.height / 2
+        )
+        pill.alphaValue = 0
+        addSubview(pill)
+        
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            pill.animator().alphaValue = 1
+        }) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSAnimationContext.runAnimationGroup({ ctx in
+                    ctx.duration = 0.6
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                    pill.animator().alphaValue = 0
+                    pill.animator().frame.origin.y += 14
+                }) {
+                    pill.removeFromSuperview()
+                }
+            }
+        }
     }
 }
 

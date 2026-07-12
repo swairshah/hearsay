@@ -37,8 +37,19 @@ final class HistoryStore {
     /// In-memory cache of the newest chunk only (for fast recent access)
     private var newestChunkItems: [TranscriptionItem]?
     
-    /// Called when history changes
-    var onHistoryChanged: (() -> Void)?
+    /// Observers called (on the main queue) when history changes.
+    /// Multiple subscribers are supported (e.g. status bar menu + history window).
+    private var changeObservers: [() -> Void] = []
+
+    /// Register a callback for history changes. Observers are never removed —
+    /// intended for app-lifetime singletons (use [weak self] in the closure).
+    func addChangeObserver(_ observer: @escaping () -> Void) {
+        changeObservers.append(observer)
+    }
+
+    private func notifyChanged() {
+        for observer in changeObservers { observer() }
+    }
     
     var maxItems: Int {
         let stored = UserDefaults.standard.integer(forKey: Self.maxItemsKey)
@@ -121,7 +132,7 @@ final class HistoryStore {
         historyLogger.info("Added transcription history item; length=\(item.text.count), duration=\(item.durationSeconds)")
         
         DispatchQueue.main.async {
-            self.onHistoryChanged?()
+            self.notifyChanged()
         }
     }
     
@@ -143,7 +154,7 @@ final class HistoryStore {
                 if chunkIdx == 0 { newestChunkItems = items }
                 historyLogger.info("Updated transcription \(item.id)")
                 DispatchQueue.main.async {
-                    self.onHistoryChanged?()
+                    self.notifyChanged()
                 }
                 return
             }
@@ -202,7 +213,7 @@ final class HistoryStore {
         historyLogger.info("History cleared")
         
         DispatchQueue.main.async {
-            self.onHistoryChanged?()
+            self.notifyChanged()
         }
     }
     
@@ -224,7 +235,7 @@ final class HistoryStore {
                 saveIndex()
                 
                 DispatchQueue.main.async {
-                    self.onHistoryChanged?()
+                    self.notifyChanged()
                 }
                 return
             }

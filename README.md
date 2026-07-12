@@ -1,6 +1,6 @@
 <h1>  <img src="assets/icon_128.png" alt="Hearsay icon" width="30"/> Hearsay</h1>
 
-**Local speech-to-text for macOS.** Hold a key, speak, release — your words appear right where your cursor is. Everything runs on your Mac. No account, no cloud, no audio ever leaves your machine.
+**Local speech-to-text for macOS.** Hold a key, speak, release — your words appear right where your cursor is. Everything runs on your Mac. 
 
 ![Demo](assets/demo.gif)
 

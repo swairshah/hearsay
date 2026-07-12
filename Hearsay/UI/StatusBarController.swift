@@ -66,6 +66,12 @@ final class StatusBarController {
         menu = NSMenu()
         menu.autoenablesItems = false  // Disable auto-validation for status bar menu
         
+        // Open main app window
+        let openWindowItem = NSMenuItem(title: "Open Window", action: #selector(openWindow(_:)), keyEquivalent: "o")
+        openWindowItem.target = self
+        openWindowItem.isEnabled = true
+        menu.addItem(openWindowItem)
+        
         // Toggle enabled
         toggleItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled(_:)), keyEquivalent: "")
         toggleItem.target = self
@@ -251,6 +257,10 @@ final class StatusBarController {
     }
     
     @objc private func showSettings(_ sender: NSMenuItem) {
+        onShowSettings?()
+    }
+    
+    @objc private func openWindow(_ sender: NSMenuItem) {
         onShowSettings?()
     }
     

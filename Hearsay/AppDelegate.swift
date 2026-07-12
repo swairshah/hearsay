@@ -1439,6 +1439,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onRetryTranscription = { [weak self] item, completion in
             self?.retryFailedTranscription(item, completion: completion)
         }
+        controller.isTranscriptionInProgress = { [weak self] in
+            self?.isTranscribing ?? false
+        }
         controller.onCleanupSettingsChanged = { [weak self] in
             guard let self = self else { return }
             if CleanupModelDownloader.shared.isEnabled && CleanupModelDownloader.shared.isModelInstalled() {

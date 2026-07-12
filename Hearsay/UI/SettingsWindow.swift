@@ -24,6 +24,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onCleanupSettingsChanged: (() -> Void)?
     /// Re-run a failed transcription (provided by AppDelegate); calls back with success.
     var onRetryTranscription: ((TranscriptionItem, @escaping (Bool) -> Void) -> Void)?
+    /// Returns true while a transcription is running; used to block model deletion.
+    var isTranscriptionInProgress: (() -> Bool)?
     
     private let tabView = NSTabView()
     private var settingsTab: SettingsTabView!
@@ -94,6 +96,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         modelsTab = ModelsTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 400))
         modelsTab.onModelSelected = { [weak self] in
             self?.onModelChanged?()
+        }
+        modelsTab.isTranscriptionInProgress = { [weak self] in
+            self?.isTranscriptionInProgress?() ?? false
         }
         let modelsItem = NSTabViewItem(identifier: "models")
         modelsItem.label = "Models"
@@ -880,6 +885,8 @@ private class AboutInfoRowView: NSView {
 private class ModelsTabView: NSView {
 
     var onModelSelected: (() -> Void)?
+    /// Returns true if a transcription is currently running (delete is blocked while it is).
+    var isTranscriptionInProgress: (() -> Bool)?
 
     private let titleLabel = NSTextField(labelWithString: "Manage Models")
     private let subtitleLabel = NSTextField(labelWithString: "Choose a speech model backend and set it as active.")
@@ -893,6 +900,7 @@ private class ModelsTabView: NSView {
     private let detailLabel = NSTextField(labelWithString: "")
 
     private var selectedModel: ModelDownloader.Model = .small
+    private var isDeleting = false
     private var cancellables = Set<AnyCancellable>()
 
     override init(frame: NSRect) {
@@ -927,6 +935,9 @@ private class ModelsTabView: NSView {
             for model in models[chunkStart..<min(chunkStart + 2, models.count)] {
                 let card = SettingsModelCardView(model: model, isSelected: false) { [weak self] in
                     self?.selectModel(model)
+                }
+                card.onDelete = { [weak self] in
+                    self?.requestDelete(model)
                 }
                 row.addArrangedSubview(card)
                 modelCards[model] = card
@@ -1039,19 +1050,24 @@ private class ModelsTabView: NSView {
         let downloader = ModelDownloader.shared
         let active = downloader.selectedModelPreference()
 
+        let controlsDisabled = downloader.isDownloading || isDeleting
         for model in ModelDownloader.Model.availableModels {
             let card = modelCards[model]
             card?.setSelected(model == selectedModel)
             card?.setInstalled(downloader.isModelInstalled(model))
             card?.setActive(active == model)
-            card?.isEnabled = !downloader.isDownloading
+            card?.isEnabled = !controlsDisabled
         }
 
         let selectedInstalled = downloader.isModelInstalled(selectedModel)
+        detailLabel.textColor = .secondaryLabelColor
 
         if downloader.isDownloading {
             actionButton.isHidden = true
             progressContainer.isHidden = false
+        } else if isDeleting {
+            actionButton.isHidden = true
+            progressContainer.isHidden = true
         } else {
             actionButton.isHidden = false
             progressContainer.isHidden = true
@@ -1064,6 +1080,86 @@ private class ModelsTabView: NSView {
                 detailLabel.stringValue = "Installed: \(installedNames). Active: \(active.displayName)."
             } else {
                 detailLabel.stringValue = "Installed: \(installedNames)."
+            }
+        }
+    }
+
+    private func requestDelete(_ model: ModelDownloader.Model) {
+        let downloader = ModelDownloader.shared
+        guard !downloader.isDownloading, !isDeleting else { return }
+        guard downloader.isModelInstalled(model) else { return }
+
+        // Defensive: don't pull files out from under an in-flight transcription.
+        if isTranscriptionInProgress?() == true {
+            let alert = NSAlert()
+            alert.messageText = "Transcription in Progress"
+            alert.informativeText = "Hearsay is currently transcribing. Wait for it to finish, then try deleting the model again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let isActive = downloader.selectedModelPreference() == model
+        let isLastModel = downloader.installedModels().count <= 1
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        if isLastModel {
+            // Deleting the last installed model leaves nothing for transcription,
+            // regardless of whether it is the persisted "active" one.
+            alert.messageText = "Delete the only installed model?"
+            alert.informativeText = "“\(model.displayName)” (\(model.estimatedSizeString)) is the only installed model. Deleting it leaves no model available for transcription until you download another. Are you sure?"
+        } else if isActive {
+            alert.messageText = "Delete the active model?"
+            alert.informativeText = "“\(model.displayName)” (\(model.estimatedSizeString)) is currently active. Hearsay will switch to another installed model after deletion."
+        } else {
+            alert.messageText = "Delete this model?"
+            alert.informativeText = "This removes “\(model.displayName)” (\(model.estimatedSizeString)) from disk. You can re-download it anytime."
+        }
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        isDeleting = true
+        detailLabel.stringValue = "Deleting \(model.displayName)…"
+        refresh()
+
+        let wasActive = downloader.selectedModelPreference() == model
+
+        Task { [weak self] in
+            // Perform the (potentially large) file removal off the main thread.
+            let deleteError: Error?
+            do {
+                try await downloader.delete(model)
+                deleteError = nil
+            } catch {
+                deleteError = error
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.isDeleting = false
+
+                if let deleteError {
+                    self.refresh()
+                    self.detailLabel.textColor = .systemRed
+                    self.detailLabel.stringValue = "Couldn't delete \(model.displayName): \(deleteError.localizedDescription)"
+                    return
+                }
+
+                if wasActive {
+                    if let next = downloader.installedModels().first {
+                        downloader.setSelectedModelPreference(next)
+                    } else {
+                        downloader.clearSelectedModelPreference()
+                    }
+                    // Active model changed → reconfigure transcriber + status bar.
+                    self.onModelSelected?()
+                }
+
+                self.refresh()
             }
         }
     }
@@ -1108,8 +1204,9 @@ private class ModelsTabView: NSView {
         y -= 34
 
         let rows = Int(ceil(Double(ModelDownloader.Model.availableModels.count) / 2.0))
-        let selectorWidth: CGFloat = min(680, bounds.width - 40)
-        let selectorHeight: CGFloat = CGFloat(rows) * 100 + CGFloat(max(0, rows - 1)) * 12
+        let selectorWidth: CGFloat = min(900, bounds.width - 40)
+        let rowSpacing = modelSelector.spacing
+        let selectorHeight: CGFloat = CGFloat(rows) * SettingsModelCardView.cardHeight + CGFloat(max(0, rows - 1)) * rowSpacing
         modelSelector.frame = NSRect(x: centerX - selectorWidth / 2, y: y - selectorHeight, width: selectorWidth, height: selectorHeight)
         y -= selectorHeight + 24
 
@@ -1130,20 +1227,26 @@ private class SettingsModelCardView: NSView {
     
     private let model: ModelDownloader.Model
     private let onSelect: () -> Void
+    /// Invoked when the user taps the trash button (only present when installed).
+    var onDelete: (() -> Void)?
     private var selected: Bool
     private var installed: Bool = false
     private var active: Bool = false
-    
+
     private let containerBox = NSBox()
     private let nameLabel = NSTextField(labelWithString: "")
     private let sizeLabel = NSTextField(labelWithString: "")
     private let descLabel = NSTextField(labelWithString: "")
-    private let checkmark = NSTextField(labelWithString: "✓")
-    private let downloadedBadge = NSTextField(labelWithString: "✓ Downloaded")
-    private let activeBadge = NSTextField(labelWithString: "Active")
-    
+    /// Single status chip (top-right): "Active" or "Downloaded" — never both. Hidden when not installed.
+    private let statusPill = NSView()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let deleteButton = NSButton()
+
     var isEnabled: Bool = true {
-        didSet { alphaValue = isEnabled ? 1.0 : 0.5 }
+        didSet {
+            alphaValue = isEnabled ? 1.0 : 0.5
+            deleteButton.isEnabled = isEnabled
+        }
     }
     
     init(model: ModelDownloader.Model, isSelected: Bool, onSelect: @escaping () -> Void) {
@@ -1166,30 +1269,46 @@ private class SettingsModelCardView: NSView {
         
         nameLabel.stringValue = model.displayName
         nameLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.maximumNumberOfLines = 1
         containerBox.addSubview(nameLabel)
-        
+
         sizeLabel.stringValue = model.estimatedSizeString
         sizeLabel.font = .systemFont(ofSize: 11)
         sizeLabel.textColor = .secondaryLabelColor
         containerBox.addSubview(sizeLabel)
-        
+
         descLabel.stringValue = model.description
         descLabel.font = .systemFont(ofSize: 11)
         descLabel.textColor = .tertiaryLabelColor
+        descLabel.lineBreakMode = .byWordWrapping
+        descLabel.maximumNumberOfLines = 2
+        descLabel.cell?.truncatesLastVisibleLine = true
         containerBox.addSubview(descLabel)
-        
-        checkmark.font = .systemFont(ofSize: 16, weight: .bold)
-        checkmark.textColor = .systemBlue
-        containerBox.addSubview(checkmark)
-        
-        downloadedBadge.font = .systemFont(ofSize: 10, weight: .medium)
-        downloadedBadge.textColor = .systemGreen
-        containerBox.addSubview(downloadedBadge)
-        
-        activeBadge.font = .systemFont(ofSize: 10, weight: .medium)
-        activeBadge.textColor = .systemBlue
-        activeBadge.alignment = .right
-        containerBox.addSubview(activeBadge)
+
+        // Status chip (top-right): one rounded tinted pill, set in updateUI().
+        statusPill.wantsLayer = true
+        statusPill.layer?.cornerRadius = 9
+        containerBox.addSubview(statusPill)
+
+        statusLabel.font = .systemFont(ofSize: 10, weight: .semibold)
+        statusLabel.alignment = .center
+        statusPill.addSubview(statusLabel)
+
+        deleteButton.bezelStyle = .inline
+        deleteButton.isBordered = false
+        deleteButton.imagePosition = .imageOnly
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Delete model")
+        deleteButton.contentTintColor = .systemRed
+        deleteButton.toolTip = "Delete this downloaded model"
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteTapped)
+        containerBox.addSubview(deleteButton)
+    }
+
+    @objc private func deleteTapped() {
+        guard isEnabled else { return }
+        onDelete?()
     }
     
     func setSelected(_ selected: Bool) {
@@ -1208,41 +1327,81 @@ private class SettingsModelCardView: NSView {
     }
     
     private func updateUI() {
+        // Selection is shown by the border alone (no separate checkmark).
         containerBox.borderColor = selected ? .systemBlue : .separatorColor
-        checkmark.isHidden = !selected
-        downloadedBadge.isHidden = !installed
-        activeBadge.isHidden = !active
+        containerBox.borderWidth = selected ? 2 : 1
+
+        // One status chip: Active (green) takes precedence over Downloaded (blue); hidden when not installed.
+        if active {
+            statusLabel.stringValue = "Active"
+            statusLabel.textColor = .systemGreen
+            statusPill.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.16).cgColor
+            statusPill.isHidden = false
+        } else if installed {
+            statusLabel.stringValue = "Downloaded"
+            statusLabel.textColor = .systemBlue
+            statusPill.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.16).cgColor
+            statusPill.isHidden = false
+        } else {
+            statusPill.isHidden = true
+        }
+
+        deleteButton.isHidden = !installed
+        needsLayout = true
     }
     
     override func layout() {
         super.layout()
-        
+
         containerBox.frame = bounds
-        
-        let padding: CGFloat = 12
-        let contentWidth = bounds.width - padding * 2 - 24
+
+        let padding: CGFloat = 16
+        let contentWidth = bounds.width - padding * 2
         var y = bounds.height - padding - 18
-        
-        nameLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: 18)
-        checkmark.sizeToFit()
-        checkmark.frame.origin = NSPoint(x: bounds.width - padding - checkmark.frame.width, y: y)
-        
-        y -= 18
+
+        // Status pill: top-right, vertically aligned with the name row.
+        var pillWidth: CGFloat = 0
+        if !statusPill.isHidden {
+            statusLabel.sizeToFit()
+            let pillHeight: CGFloat = 18
+            let hInset: CGFloat = 9
+            pillWidth = ceil(statusLabel.frame.width) + hInset * 2
+            statusPill.frame = NSRect(x: bounds.width - padding - pillWidth, y: y, width: pillWidth, height: pillHeight)
+            statusLabel.frame = NSRect(
+                x: hInset,
+                y: (pillHeight - statusLabel.frame.height) / 2,
+                width: statusPill.bounds.width - hInset * 2,
+                height: statusLabel.frame.height
+            )
+        }
+
+        // Name row: left, ending before the pill so they never collide.
+        let nameRightInset = pillWidth > 0 ? pillWidth + 8 : 0
+        nameLabel.frame = NSRect(x: padding, y: y, width: contentWidth - nameRightInset, height: 18)
+
+        y -= 22
         sizeLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: 16)
-        
-        y -= 18
-        descLabel.frame = NSRect(x: padding, y: y, width: bounds.width - padding * 2, height: 16)
-        
-        y -= 18
-        downloadedBadge.sizeToFit()
-        downloadedBadge.frame.origin = NSPoint(x: padding, y: y)
-        
-        activeBadge.sizeToFit()
-        activeBadge.frame.origin = NSPoint(x: bounds.width - padding - activeBadge.frame.width, y: y)
+
+        // Description: up to two wrapped lines, in the band between the size row and the trash.
+        let descHeight: CGFloat = 32
+        y -= descHeight + 4
+        descLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: descHeight)
+
+        // Trash button: alone in the bottom-right (only when installed).
+        let trashSize: CGFloat = 18
+        deleteButton.frame = NSRect(
+            x: bounds.width - padding - trashSize,
+            y: padding,
+            width: trashSize,
+            height: trashSize
+        )
     }
     
+    /// Shared so ModelsTabView's selector height math stays in sync with the card.
+    static let cardHeight: CGFloat = 136
+
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 220, height: 100)
+        NSSize(width: 260, height: Self.cardHeight)
     }
     
     override func mouseDown(with event: NSEvent) {

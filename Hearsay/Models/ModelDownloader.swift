@@ -4,6 +4,23 @@ import WhisperKit
 
 private let downloadLogger = Logger(subsystem: "com.swair.hearsay", category: "download")
 
+enum ModelDownloaderError: LocalizedError {
+    case busy
+    case invalidModel
+    case deletionIncomplete
+
+    var errorDescription: String? {
+        switch self {
+        case .busy:
+            return "A download is in progress."
+        case .invalidModel:
+            return "Unsupported model."
+        case .deletionIncomplete:
+            return "Some model files could not be removed."
+        }
+    }
+}
+
 /// Downloads models with progress reporting.
 /// Supports qwen_asr, WhisperKit, and FluidAudio/Parakeet variants.
 final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
@@ -115,6 +132,29 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
                 return nil
             }
         }
+
+        /// Legacy cache path components for older WhisperKit folder layouts.
+        var whisperLegacyCachePathComponents: [String]? {
+            switch self {
+            case .whisperTinyEn:
+                return ["openai", "whisper-tiny.en"]
+            case .whisperSmallEn:
+                return ["openai", "whisper-small.en"]
+            case .small, .large, .parakeetEnglishV2, .parakeetMultilingualV3:
+                return nil
+            }
+        }
+
+        /// All on-disk cache directories (current + legacy) where this Whisper model may live.
+        /// Single source of truth for both install detection and deletion.
+        var whisperCacheDirectories: [URL] {
+            let root = Constants.whisperModelsRootDirectory
+            return [whisperCachePathComponents, whisperLegacyCachePathComponents]
+                .compactMap { $0 }
+                .map { components in
+                    components.reduce(root) { $0.appendingPathComponent($1, isDirectory: true) }
+                }
+        }
         
         var files: [String] {
             switch self {
@@ -199,6 +239,11 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         }
         UserDefaults.standard.set(model.rawValue, forKey: Self.selectedModelDefaultsKey)
     }
+
+    /// Clear the persisted active-model preference (e.g. after deleting the active model with none left).
+    func clearSelectedModelPreference() {
+        UserDefaults.standard.removeObject(forKey: Self.selectedModelDefaultsKey)
+    }
     
     /// Check if a model is installed
     func isModelInstalled(_ model: Model) -> Bool {
@@ -213,35 +258,10 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
             }
             return true
         case .whisperKit:
-            // Primary expected cache path for current WhisperKit versions
-            if let cachePathComponents = model.whisperCachePathComponents {
-                let modelPath = cachePathComponents.reduce(Constants.whisperModelsRootDirectory) { partialURL, component in
-                    partialURL.appendingPathComponent(component, isDirectory: true)
-                }
-                if FileManager.default.fileExists(atPath: modelPath.path) {
-                    return true
-                }
+            // Installed if any current/legacy cache directory exists.
+            return model.whisperCacheDirectories.contains { directory in
+                FileManager.default.fileExists(atPath: directory.path)
             }
-
-            // Backward-compatible fallback for older folder layouts
-            let legacyPathComponents: [String]
-            switch model {
-            case .whisperTinyEn:
-                legacyPathComponents = ["openai", "whisper-tiny.en"]
-            case .whisperSmallEn:
-                legacyPathComponents = ["openai", "whisper-small.en"]
-            case .small, .large, .parakeetEnglishV2, .parakeetMultilingualV3:
-                legacyPathComponents = []
-            }
-
-            if !legacyPathComponents.isEmpty {
-                let legacyPath = legacyPathComponents.reduce(Constants.whisperModelsRootDirectory) { partialURL, component in
-                    partialURL.appendingPathComponent(component, isDirectory: true)
-                }
-                return FileManager.default.fileExists(atPath: legacyPath.path)
-            }
-
-            return false
         case .parakeet:
             guard let parakeetModel = model.parakeetModel else {
                 return false
@@ -256,6 +276,58 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     /// Get list of installed models
     func installedModels() -> [Model] {
         Model.availableModels.filter { isModelInstalled($0) }
+    }
+
+    /// Delete an installed model's files from disk. Backend-specific.
+    /// Throws if removal fails or the model is still detected as installed afterward.
+    func delete(_ model: Model) async throws {
+        guard !isDownloading else {
+            throw ModelDownloaderError.busy
+        }
+
+        downloadLogger.info("Deleting model \(model.rawValue)")
+
+        do {
+            switch model.backend {
+            case .qwenASR:
+                let modelDir = Constants.modelsDirectory.appendingPathComponent(model.rawValue)
+                if FileManager.default.fileExists(atPath: modelDir.path) {
+                    try FileManager.default.removeItem(at: modelDir)
+                }
+
+            case .whisperKit:
+                for directory in model.whisperCacheDirectories
+                where FileManager.default.fileExists(atPath: directory.path) {
+                    try FileManager.default.removeItem(at: directory)
+                }
+
+            case .parakeet:
+                guard let parakeetModel = model.parakeetModel else {
+                    throw ModelDownloaderError.invalidModel
+                }
+                // Removes all cached dirs and stops the helper if this model is active.
+                try await ParakeetClient.shared.deleteCaches(parakeetModel)
+            }
+
+            // Verify the model is actually gone.
+            if isModelInstalled(model) {
+                throw ModelDownloaderError.deletionIncomplete
+            }
+        } catch {
+            downloadLogger.error("Failed to delete \(model.rawValue): \(error.localizedDescription)")
+            DiagnosticLog.shared.event(
+                "model.delete_failed",
+                level: .error,
+                fields: ["model": model.rawValue, "backend": "\(model.backend)"]
+                    .merging(DiagnosticLog.shared.errorFields(for: error)) { current, _ in current }
+            )
+            throw error
+        }
+
+        DiagnosticLog.shared.event("model.deleted", fields: [
+            "model": model.rawValue,
+            "backend": "\(model.backend)"
+        ])
     }
     
     /// Start downloading a model

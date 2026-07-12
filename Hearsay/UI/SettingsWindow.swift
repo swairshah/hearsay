@@ -258,6 +258,7 @@ private class SettingsTabView: NSView {
     private var holdRow: ShortcutRowView!
     private var toggleRow: ShortcutRowView!
     private var screenshotRow: ShortcutRowView!
+    private var fullScreenshotRow: ShortcutRowView!
     private let resetButton = NSButton(title: "Reset to Defaults", target: nil, action: nil)
     
     override init(frame: NSRect) {
@@ -393,19 +394,35 @@ private class SettingsTabView: NSView {
             captureMode: .keyCombo,
             placeholder: "Not set",
             canClear: true,
-            showSeparator: false
+            showSeparator: true
         ) { [weak self] s in
             UserDefaults.standard.set(s.keyCode, forKey: "screenshotKeyCode")
             UserDefaults.standard.set(Int(s.modifiers), forKey: "screenshotModifiers")
             self?.onHotkeyChanged?()
         }
         shortcutsBox.contentView?.addSubview(screenshotRow)
-        
-        // Conflict detection
+
+        fullScreenshotRow = ShortcutRowView(
+            label: "Full-Screen Screenshot",
+            captureMode: .keyCombo,
+            placeholder: "Not set",
+            canClear: true,
+            showSeparator: false
+        ) { [weak self] s in
+            UserDefaults.standard.set(s.keyCode, forKey: "fullScreenshotKeyCode")
+            UserDefaults.standard.set(Int(s.modifiers), forKey: "fullScreenshotModifiers")
+            self?.onHotkeyChanged?()
+        }
+        shortcutsBox.contentView?.addSubview(fullScreenshotRow)
+
+        // Conflict detection across the three combo shortcuts
         toggleRow.recorder.onConflict = { [weak self] candidate in
             guard let self = self else { return nil }
             if candidate.conflicts(with: self.screenshotRow.recorder.currentShortcut) {
                 return "This shortcut is already used by \"Take Screenshot\"."
+            }
+            if candidate.conflicts(with: self.fullScreenshotRow.recorder.currentShortcut) {
+                return "This shortcut is already used by \"Full-Screen Screenshot\"."
             }
             return nil
         }
@@ -413,6 +430,19 @@ private class SettingsTabView: NSView {
             guard let self = self else { return nil }
             if candidate.conflicts(with: self.toggleRow.recorder.currentShortcut) {
                 return "This shortcut is already used by \"Toggle Record\"."
+            }
+            if candidate.conflicts(with: self.fullScreenshotRow.recorder.currentShortcut) {
+                return "This shortcut is already used by \"Full-Screen Screenshot\"."
+            }
+            return nil
+        }
+        fullScreenshotRow.recorder.onConflict = { [weak self] candidate in
+            guard let self = self else { return nil }
+            if candidate.conflicts(with: self.toggleRow.recorder.currentShortcut) {
+                return "This shortcut is already used by \"Toggle Record\"."
+            }
+            if candidate.conflicts(with: self.screenshotRow.recorder.currentShortcut) {
+                return "This shortcut is already used by \"Take Screenshot\"."
             }
             return nil
         }
@@ -461,6 +491,11 @@ private class SettingsTabView: NSView {
         screenshotRow.recorder.setShortcut(Shortcut(
             keyCode: UserDefaults.standard.object(forKey: "screenshotKeyCode") as? Int ?? 21,
             modifiers: UInt(UserDefaults.standard.object(forKey: "screenshotModifiers") as? Int ?? Int(NSEvent.ModifierFlags.option.rawValue))
+        ))
+
+        fullScreenshotRow.recorder.setShortcut(Shortcut(
+            keyCode: UserDefaults.standard.object(forKey: "fullScreenshotKeyCode") as? Int ?? 20,
+            modifiers: UInt(UserDefaults.standard.object(forKey: "fullScreenshotModifiers") as? Int ?? Int(NSEvent.ModifierFlags.option.rawValue))
         ))
     }
     
@@ -520,7 +555,7 @@ private class SettingsTabView: NSView {
         // Shortcuts box
         let rowH: CGFloat = 40
         let resetH: CGFloat = 32
-        let shortcutsH: CGFloat = rowH * 4 + resetH + 20  // activation + 3 rows + reset + padding
+        let shortcutsH: CGFloat = rowH * 5 + resetH + 20  // activation + 4 rows + reset + padding
         shortcutsBox.frame = NSRect(x: pad, y: y - shortcutsH, width: boxW, height: shortcutsH)
         layoutShortcutsBox()
     }
@@ -546,7 +581,9 @@ private class SettingsTabView: NSView {
         toggleRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
         y -= rowH
         screenshotRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
-        
+        y -= rowH
+        fullScreenshotRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
+
         // Reset button below everything
         resetButton.sizeToFit()
         resetButton.frame.origin = NSPoint(x: cv.bounds.width - inset - resetButton.frame.width, y: y - 28)
@@ -628,6 +665,8 @@ private class SettingsTabView: NSView {
         UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "toggleStartModifiers")
         UserDefaults.standard.set(21, forKey: "screenshotKeyCode")
         UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "screenshotModifiers")
+        UserDefaults.standard.set(20, forKey: "fullScreenshotKeyCode")
+        UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "fullScreenshotModifiers")
         loadSettings()
         onHotkeyChanged?()
     }

@@ -270,7 +270,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.onScreenshotRequested = { [weak self] in
             self?.captureScreenshot()
         }
-        
+
+        hotkeyMonitor.onFullScreenshotRequested = { [weak self] in
+            self?.captureFullScreen()
+        }
+
         // Set up screenshot manager callback — fires when screenshot is actually saved (after drag+release)
         ScreenshotManager.shared.onScreenshotCaptured = { [weak self] count in
             guard let self = self else { return }
@@ -586,6 +590,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         logger.info("Capturing screenshot...")
         ScreenshotManager.shared.captureScreenshot()
+    }
+
+    private func captureFullScreen() {
+        guard isRecording else {
+            logger.warning("Not recording, ignoring full-screen screenshot request")
+            return
+        }
+
+        logger.info("Capturing full screen...")
+        ScreenshotManager.shared.captureFullScreen()
     }
     
     private func stopRecording() {

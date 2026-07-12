@@ -31,6 +31,7 @@ final class HotkeyMonitor {
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
     var onScreenshotRequested: (() -> Void)?
+    var onFullScreenshotRequested: (() -> Void)?
     
     private(set) var state: State = .idle
     private var eventTap: CFMachPort?
@@ -49,6 +50,12 @@ final class HotkeyMonitor {
     private let screenshotHotKeyID: UInt32 = 2
     private var screenshotKeyCode: UInt32 = 21  // '4' key
     private var screenshotModifiers: UInt64 = UInt64(CGEventFlags.maskAlternate.rawValue)
+
+    // Full-screen screenshot hotkey (configurable, default Option+3)
+    private var fullScreenshotHotKeyRef: EventHotKeyRef?
+    private let fullScreenshotHotKeyID: UInt32 = 3
+    private var fullScreenshotKeyCode: UInt32 = 20  // '3' key
+    private var fullScreenshotModifiers: UInt64 = UInt64(CGEventFlags.maskAlternate.rawValue)
     
     private let tapDisableWindow: TimeInterval = 10.0
     private let maxTapDisableEventsBeforeRestart = 3
@@ -85,6 +92,8 @@ final class HotkeyMonitor {
         toggleStopKeyCode = Int64(UserDefaults.standard.object(forKey: "toggleStopKeyCode") as? Int ?? 49)
         screenshotKeyCode = UInt32(UserDefaults.standard.object(forKey: "screenshotKeyCode") as? Int ?? 21)
         screenshotModifiers = UInt64(UserDefaults.standard.object(forKey: "screenshotModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
+        fullScreenshotKeyCode = UInt32(UserDefaults.standard.object(forKey: "fullScreenshotKeyCode") as? Int ?? 20)
+        fullScreenshotModifiers = UInt64(UserDefaults.standard.object(forKey: "fullScreenshotModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
         hotkeyLogger.info("Hotkeys loaded: activation=\(self.activationMode.rawValue), hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), screenshot=\(self.screenshotKeyCode)+\(self.screenshotModifiers)")
         // Reset double-tap state when settings change
         lastTapTime = nil
@@ -146,14 +155,16 @@ final class HotkeyMonitor {
         state = .idle
     }
     
-    /// Enable screenshot hotkey (call when recording starts)
+    /// Enable screenshot hotkeys (call when recording starts)
     func enableScreenshotHotKey() {
         registerScreenshotHotKey()
+        registerFullScreenshotHotKey()
     }
-    
-    /// Disable screenshot hotkey (call when recording stops)
+
+    /// Disable screenshot hotkeys (call when recording stops)
     func disableScreenshotHotKey() {
         unregisterScreenshotHotKey()
+        unregisterFullScreenshotHotKey()
     }
     
     // MARK: - Event Tap Lifecycle
@@ -489,6 +500,8 @@ final class HotkeyMonitor {
                         monitor.handleToggleHotKeyPressed()
                     } else if hotKeyID.id == monitor.screenshotHotKeyID {
                         monitor.handleScreenshotHotKeyPressed()
+                    } else if hotKeyID.id == monitor.fullScreenshotHotKeyID {
+                        monitor.handleFullScreenshotHotKeyPressed()
                     }
                 }
                 return noErr
@@ -568,17 +581,62 @@ final class HotkeyMonitor {
             hotkeyLogger.info("Unregistered screenshot hotkey")
         }
     }
-    
+
+    private func registerFullScreenshotHotKey() {
+        unregisterFullScreenshotHotKey()
+
+        guard fullScreenshotKeyCode > 0 else { return }
+
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("HSY3"), id: fullScreenshotHotKeyID)
+        let carbonModifiers = carbonModifiersFromCGFlags(fullScreenshotModifiers)
+
+        let status = RegisterEventHotKey(
+            fullScreenshotKeyCode,
+            carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &fullScreenshotHotKeyRef
+        )
+
+        if status != noErr {
+            hotkeyLogger.error("Failed to register full-screen screenshot hotkey: keyCode=\(self.fullScreenshotKeyCode), modifiers=\(self.fullScreenshotModifiers), status=\(status)")
+        } else {
+            hotkeyLogger.info("Registered full-screen screenshot hotkey: keyCode=\(self.fullScreenshotKeyCode), carbonModifiers=\(carbonModifiers)")
+        }
+    }
+
+    private func unregisterFullScreenshotHotKey() {
+        if let ref = fullScreenshotHotKeyRef {
+            UnregisterEventHotKey(ref)
+            fullScreenshotHotKeyRef = nil
+            hotkeyLogger.info("Unregistered full-screen screenshot hotkey")
+        }
+    }
+
     private func handleScreenshotHotKeyPressed() {
         // Only trigger if we're currently recording
         guard state == .recordingHold || state == .recordingToggle else {
             hotkeyLogger.info("Screenshot hotkey pressed but not recording - ignoring")
             return
         }
-        
+
         hotkeyLogger.info("SCREENSHOT HOTKEY - triggering screenshot capture")
         DispatchQueue.main.async { [weak self] in
             self?.onScreenshotRequested?()
+        }
+    }
+
+    private func handleFullScreenshotHotKeyPressed() {
+        // Only trigger if we're currently recording
+        guard state == .recordingHold || state == .recordingToggle else {
+            hotkeyLogger.info("Full-screen screenshot hotkey pressed but not recording - ignoring")
+            return
+        }
+
+        hotkeyLogger.info("FULL-SCREEN SCREENSHOT HOTKEY - triggering capture")
+        DispatchQueue.main.async { [weak self] in
+            self?.onFullScreenshotRequested?()
         }
     }
     

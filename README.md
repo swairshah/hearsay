@@ -1,74 +1,53 @@
 <h1>  <img src="assets/icon_128.png" alt="Hearsay icon" width="30"/> Hearsay</h1>
 
-**[Download Hearsay 1.0.24 DMG](https://github.com/swairshah/hearsay/releases/download/v1.0.24/Hearsay-1.0.24.dmg)**
+**Local speech-to-text for macOS.** Hold a key, speak, release — your words appear right where your cursor is. Everything runs on your Mac. No account, no cloud, no audio ever leaves your machine.
 
-Browse all [Releases](https://github.com/swairshah/hearsay/releases).
+![Demo](assets/demo.gif)
 
-__Local speech-to-text for macOS__.
+## Install
 
-You can also install with Homebrew:
+**[⬇ Download the latest release](https://github.com/swairshah/hearsay/releases/latest)** — open the DMG and drag Hearsay to Applications.
+
+Or with Homebrew:
 
 ```bash
 brew install --cask swairshah/tap/hearsay
 ```
 
-Hold Right Option to record, release to transcribe, auto-paste at cursor.
-
-Hearsay supports multiple local speech model backends:
-
-- Qwen3-ASR through Antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a>
-- Whisper models through WhisperKit
-- NVIDIA Parakeet models through FluidAudio
-
-### Local models FTW.
-
-![Demo](assets/demo.gif)
-
-## Usage
+## How to use
 
 | Action | How |
 |--------|-----|
-| **Record** | Hold **Right Option (⌥)** |
-| **Transcribe** | Release the key |
-| **Toggle mode** | **Right Option + Space** to start/stop |
+| **Record** | Hold **Right Option (⌥)** and speak |
+| **Transcribe** | Release the key — text is pasted at your cursor |
+| **Hands-free mode** | **Right Option + Space** to start, **Space** or **Esc** to stop |
+| **Screenshot while recording** | **⌥4** to select a region, **⌥3** for the full screen — images are referenced in your transcript |
 
-Transcribed text is automatically pasted at your cursor and copied to clipboard.
+Transcribed text is pasted at your cursor and copied to the clipboard.
 
-## CLI
+Every transcription is saved locally in **History** — find recent ones in the menu bar dropdown, or open the Hearsay window and click any line to copy it again. If a transcription ever fails, the audio is kept and you can retry it from History with one click.
 
-Homebrew cask installs can expose the bundled `hearsay` command when the cask includes the binary stanza for the app bundle.
-
-```bash
-hearsay open
-hearsay health
-hearsay dictate --stop-on-enter
-hearsay history --limit 5
-hearsay logs
-hearsay logs --open
-```
-
-Apps and editor extensions can use Hearsay as a local dictation provider. See
-[Local API Integration Guide](docs/local-api-integration-guide.md).
-
-## First Launch
+## First launch
 
 1. Grant **Microphone** permission when prompted
 2. Grant **Accessibility** permission (System Settings → Privacy & Security → Accessibility)
-3. Choose a speech model to download:
-   - **Qwen** — fast and quality local ASR options
-   - **Whisper** — local English transcription through WhisperKit
-   - **Parakeet** — local English and multilingual options through FluidAudio
+3. Pick a speech model to download:
+   - **Qwen** — fast, high-quality, works on all Macs (recommended)
+   - **Whisper** — English transcription (Apple Silicon)
+   - **Parakeet** — English and multilingual (Apple Silicon)
 
-Models are stored in `~/Library/Application Support/Hearsay/Models/`
+You can download, switch between, and delete models anytime in **Settings → Models**. Shortcuts, cleanup rules, and more are configurable in Settings too.
 
 ## Requirements
 
-- macOS 13.0 (Ventura) or later
-- Works on both Apple Silicon and Intel Macs
+- macOS 13 (Ventura) or later
+- Apple Silicon or Intel
 
-## Development
+## For developers
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions and technical details.
+- Hearsay ships with a `hearsay` CLI (`hearsay dictate`, `hearsay history`, `hearsay logs`, …). Apps and editor extensions can use Hearsay as a local dictation provider — see the [Local API Integration Guide](docs/local-api-integration-guide.md).
+- Speech backends: [qwen-asr](https://github.com/antirez/qwen-asr) by antirez, [WhisperKit](https://github.com/argmaxinc/WhisperKit), and NVIDIA Parakeet via [FluidAudio](https://github.com/FluidInference/FluidAudio).
+- Build instructions and architecture: [DEVELOPMENT.md](DEVELOPMENT.md)
 
 ## License
 

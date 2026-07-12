@@ -126,10 +126,28 @@ final class HistoryStore {
     }
     
     @discardableResult
-    func add(text: String, durationSeconds: Double, audioFilePath: String? = nil) -> TranscriptionItem {
-        let item = TranscriptionItem(text: text, durationSeconds: durationSeconds, audioFilePath: audioFilePath)
+    func add(text: String, durationSeconds: Double, audioFilePath: String? = nil, failed: Bool? = nil) -> TranscriptionItem {
+        let item = TranscriptionItem(text: text, durationSeconds: durationSeconds, audioFilePath: audioFilePath, failed: failed)
         add(item)
         return item
+    }
+
+    /// Replace an existing item (matched by id) in place, preserving its position.
+    /// Used to update a failed entry to a successful one after a retry.
+    func update(_ item: TranscriptionItem) {
+        for (chunkIdx, chunkMeta) in index.chunks.enumerated() {
+            var items = loadChunk(id: chunkMeta.id)
+            if let itemIdx = items.firstIndex(where: { $0.id == item.id }) {
+                items[itemIdx] = item
+                saveChunk(id: chunkMeta.id, items: items)
+                if chunkIdx == 0 { newestChunkItems = items }
+                historyLogger.info("Updated transcription \(item.id)")
+                DispatchQueue.main.async {
+                    self.onHistoryChanged?()
+                }
+                return
+            }
+        }
     }
     
     /// Get the most recent N items (reads only what's needed).

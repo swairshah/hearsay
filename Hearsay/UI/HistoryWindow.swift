@@ -12,6 +12,9 @@ final class HistoryWindowController: NSWindowController {
     private var items: [TranscriptionItem] = []
     private var selectedIndex: Int? = nil
     private var cardViews: [HistoryCardView] = []
+
+    /// Re-run a failed transcription. Provided by AppDelegate; calls back with success.
+    var onRetry: ((TranscriptionItem, @escaping (Bool) -> Void) -> Void)?
     
     private static let pageSize = 100
     private var loadedCount = 0
@@ -91,13 +94,14 @@ final class HistoryWindowController: NSWindowController {
         let clearButton = NSButton(title: "Clear All", target: self, action: #selector(clearAll(_:)))
         clearButton.translatesAutoresizingMaskIntoConstraints = false
         clearButton.bezelStyle = .rounded
-        
-        let copyButton = NSButton(title: "Copy Selected", target: self, action: #selector(copySelected(_:)))
-        copyButton.translatesAutoresizingMaskIntoConstraints = false
-        copyButton.bezelStyle = .rounded
-        
+
+        let hintLabel = NSTextField(labelWithString: "Hover a row to copy")
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+        hintLabel.font = .systemFont(ofSize: 11)
+        hintLabel.textColor = .tertiaryLabelColor
+
         buttonBar.addSubview(clearButton)
-        buttonBar.addSubview(copyButton)
+        buttonBar.addSubview(hintLabel)
         contentView.addSubview(buttonBar)
         
         NSLayoutConstraint.activate([
@@ -121,10 +125,10 @@ final class HistoryWindowController: NSWindowController {
             // Buttons
             clearButton.leadingAnchor.constraint(equalTo: buttonBar.leadingAnchor, constant: 16),
             clearButton.centerYAnchor.constraint(equalTo: buttonBar.centerYAnchor),
-            
-            copyButton.leadingAnchor.constraint(equalTo: clearButton.trailingAnchor, constant: 12),
-            copyButton.centerYAnchor.constraint(equalTo: buttonBar.centerYAnchor),
-            
+
+            hintLabel.trailingAnchor.constraint(equalTo: buttonBar.trailingAnchor, constant: -16),
+            hintLabel.centerYAnchor.constraint(equalTo: buttonBar.centerYAnchor),
+
             // Wrapper sizing
             wrapperView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor)
         ])
@@ -194,7 +198,14 @@ final class HistoryWindowController: NSWindowController {
             card.translatesAutoresizingMaskIntoConstraints = false
             card.configure(with: item, isEven: index % 2 == 0)
             card.index = index
-            
+
+            let capturedItem = item
+            card.onCopy = { [weak self] in self?.copyItem(capturedItem) }
+            card.onRetry = { [weak self, weak card] in
+                guard let self = self, let card = card else { return }
+                self.retryItem(capturedItem, card: card)
+            }
+
             let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(cardClicked(_:)))
             card.addGestureRecognizer(clickGesture)
             
@@ -262,21 +273,36 @@ final class HistoryWindowController: NSWindowController {
     // MARK: - Actions
     
     @objc private func copySelected(_ sender: Any) {
-        guard let index = selectedIndex, index < items.count else {
-            // Flash window title if nothing selected
-            window?.title = "Select an item first"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.window?.title = "Transcription History"
-            }
-            return
-        }
-        
-        let item = items[index]
+        guard let index = selectedIndex, index < items.count else { return }
+        copyItem(items[index])
+    }
+
+    /// Copy a specific item's text to the clipboard, with a brief title confirmation.
+    private func copyItem(_ item: TranscriptionItem) {
+        guard !item.isFailed else { return }
         TextInserter.copyToClipboard(item.text)
-        
-        // Visual feedback
-        window?.title = "Copied!"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        flashTitle("Copied!")
+    }
+
+    /// Re-run a failed item's transcription, updating the card while it works.
+    private func retryItem(_ item: TranscriptionItem, card: HistoryCardView) {
+        guard let onRetry = onRetry else { return }
+        card.setRetrying(true)
+        onRetry(item) { [weak self, weak card] success in
+            DispatchQueue.main.async {
+                card?.setRetrying(false)
+                if success {
+                    self?.loadHistory()  // refresh so the recovered text replaces the failed row
+                } else {
+                    self?.flashTitle("Retry failed")
+                }
+            }
+        }
+    }
+
+    private func flashTitle(_ message: String) {
+        window?.title = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             self?.window?.title = "Transcription History"
         }
     }
@@ -325,8 +351,17 @@ private class HistoryCardView: NSView {
     private let textLabel = NSTextField(labelWithString: "")
     private let timeLabel = NSTextField(labelWithString: "")
     private let figuresBadge = NSTextField(labelWithString: "")
+    private let copyButton = NSButton()
+    private let retryButton = NSButton()
+    private var trackingArea: NSTrackingArea?
     private var isSelectedState = false
     private var isEvenRow = false
+    private var isFailedItem = false
+
+    /// Copy this row's text. Set by the controller.
+    var onCopy: (() -> Void)?
+    /// Retry this failed row's transcription. Set by the controller.
+    var onRetry: (() -> Void)?
     
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -369,43 +404,119 @@ private class HistoryCardView: NSView {
         figuresBadge.textColor = .secondaryLabelColor
         figuresBadge.isHidden = true
         addSubview(figuresBadge)
-        
+
+        // Inline copy button — appears on hover (success rows only)
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        copyButton.isBordered = false
+        copyButton.bezelStyle = .regularSquare
+        copyButton.imagePosition = .imageOnly
+        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")
+        copyButton.contentTintColor = .secondaryLabelColor
+        copyButton.toolTip = "Copy"
+        copyButton.target = self
+        copyButton.action = #selector(copyTapped)
+        copyButton.isHidden = true
+        addSubview(copyButton)
+
+        // Inline retry button — shown on failed rows
+        retryButton.translatesAutoresizingMaskIntoConstraints = false
+        retryButton.bezelStyle = .rounded
+        retryButton.controlSize = .small
+        retryButton.title = "Retry"
+        retryButton.toolTip = "Re-run transcription on the saved audio"
+        retryButton.target = self
+        retryButton.action = #selector(retryTapped)
+        retryButton.isHidden = true
+        addSubview(retryButton)
+
         NSLayoutConstraint.activate([
-            // Text — pinned top, single line
+            // Text — pinned top, single line (leave room on the right for the buttons)
             textLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             textLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            textLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            
+            textLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -72),
+
             // Time — fixed below text, pinned to bottom
             timeLabel.topAnchor.constraint(equalTo: textLabel.bottomAnchor, constant: 6),
             timeLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             timeLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            
+
             // Figures badge - bottom right
             figuresBadge.centerYAnchor.constraint(equalTo: timeLabel.centerYAnchor),
-            figuresBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)
+            figuresBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+
+            // Copy button - top right
+            copyButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            copyButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            copyButton.widthAnchor.constraint(equalToConstant: 20),
+            copyButton.heightAnchor.constraint(equalToConstant: 20),
+
+            // Retry button - right, vertically centered
+            retryButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            retryButton.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea = trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if !isFailedItem, onCopy != nil { copyButton.isHidden = false }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if !isFailedItem { copyButton.isHidden = true }
+    }
+
+    @objc private func copyTapped() { onCopy?() }
+    @objc private func retryTapped() { onRetry?() }
+
+    /// Reflect retry-in-progress state on the button.
+    func setRetrying(_ retrying: Bool) {
+        retryButton.isEnabled = !retrying
+        retryButton.title = retrying ? "Retrying…" : "Retry"
     }
     
     func configure(with item: TranscriptionItem, isEven: Bool) {
         self.isEvenRow = isEven
-        
-        // Clean up display text — single line preview, full text on hover
-        let displayText = cleanDisplayText(item.text)
-        textLabel.stringValue = displayText
-        textLabel.toolTip = item.text
-        
-        timeLabel.stringValue = item.formattedTime
-        
-        // Count figures
-        let figureCount = countFigures(in: item.text)
-        if figureCount > 0 {
-            figuresBadge.stringValue = "📎 \(figureCount) figure\(figureCount == 1 ? "" : "s")"
-            figuresBadge.isHidden = false
-        } else {
+        self.isFailedItem = item.isFailed
+
+        if item.isFailed {
+            // Failed transcription: show a clear label + a Retry affordance.
+            textLabel.stringValue = "⚠️ Transcription failed — audio saved"
+            textLabel.toolTip = "Transcription failed. Click Retry to run it again on the saved audio."
+            copyButton.isHidden = true
+            retryButton.isHidden = false
+            setRetrying(false)
             figuresBadge.isHidden = true
+        } else {
+            // Clean up display text — single line preview, full text on hover
+            let displayText = cleanDisplayText(item.text)
+            textLabel.stringValue = displayText
+            textLabel.toolTip = item.text
+            retryButton.isHidden = true
+            copyButton.isHidden = true  // revealed on hover
+
+            // Count figures
+            let figureCount = countFigures(in: item.text)
+            if figureCount > 0 {
+                figuresBadge.stringValue = "📎 \(figureCount) figure\(figureCount == 1 ? "" : "s")"
+                figuresBadge.isHidden = false
+            } else {
+                figuresBadge.isHidden = true
+            }
         }
-        
+
+        timeLabel.stringValue = item.formattedTime
         updateBackground()
     }
     
@@ -456,11 +567,11 @@ private class HistoryCardView: NSView {
             timeLabel.textColor = NSColor.white.withAlphaComponent(0.7)
             figuresBadge.textColor = NSColor.white.withAlphaComponent(0.7)
         } else {
-            let bgColor: NSColor = isEvenRow 
-                ? .controlBackgroundColor 
+            let bgColor: NSColor = isEvenRow
+                ? .controlBackgroundColor
                 : .controlBackgroundColor.withAlphaComponent(0.5)
             layer?.backgroundColor = bgColor.cgColor
-            textLabel.textColor = .labelColor
+            textLabel.textColor = isFailedItem ? .systemOrange : .labelColor
             timeLabel.textColor = .tertiaryLabelColor
             figuresBadge.textColor = .secondaryLabelColor
         }

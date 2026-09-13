@@ -139,6 +139,21 @@ final class HearsayLocalAPIServer {
             return
         }
 
+        if request.method == "GET", components == ["v1", "microphones"] {
+            handleGetMicrophones(on: connection)
+            return
+        }
+
+        if request.method == "GET", components == ["v1", "microphones", "current"] {
+            handleGetCurrentMicrophone(on: connection)
+            return
+        }
+
+        if request.method == "POST", components == ["v1", "microphones", "select"] {
+            handleSelectMicrophone(request, on: connection)
+            return
+        }
+
         if request.method == "POST", components == ["v1", "dictations"] {
             handleStart(request, on: connection)
             return
@@ -176,6 +191,99 @@ final class HearsayLocalAPIServer {
                 "apiVersion": 1,
                 "state": state.rawValue
             ] as [String: Any])
+        }
+    }
+
+    private func handleGetMicrophones(on connection: NWConnection) {
+        Task { @MainActor in
+            let mgr = MicrophoneManager.shared
+            mgr.refresh()
+            let devices = mgr.availableDevices.map { dev -> [String: Any] in
+                [
+                    "uid": dev.uid,
+                    "name": dev.name,
+                    "isBuiltIn": dev.isBuiltIn,
+                    "isActive": dev.uid == mgr.activeDevice?.uid,
+                    "isSelected": dev.uid == mgr.selectedDeviceUID
+                ]
+            }
+            var resp: [String: Any] = [
+                "devices": devices,
+                "selectedUID": mgr.selectedDeviceUID ?? NSNull()
+            ]
+            if let active = mgr.activeDevice {
+                resp["activeDevice"] = [
+                    "uid": active.uid,
+                    "name": active.name,
+                    "isBuiltIn": active.isBuiltIn
+                ]
+            }
+            sendJSON(connection, status: 200, object: resp)
+        }
+    }
+
+    private func handleGetCurrentMicrophone(on connection: NWConnection) {
+        Task { @MainActor in
+            let mgr = MicrophoneManager.shared
+            mgr.refresh()
+            var resp: [String: Any] = [
+                "selectedUID": mgr.selectedDeviceUID ?? NSNull()
+            ]
+            if let active = mgr.activeDevice {
+                resp["activeDevice"] = [
+                    "uid": active.uid,
+                    "name": active.name,
+                    "isBuiltIn": active.isBuiltIn
+                ]
+            }
+            sendJSON(connection, status: 200, object: resp)
+        }
+    }
+
+    private struct SelectMicrophonePayload: Decodable {
+        let uid: String?
+    }
+
+    private func handleSelectMicrophone(_ request: HTTPRequest, on connection: NWConnection) {
+        let payload: SelectMicrophonePayload
+        do {
+            payload = try JSONDecoder().decode(SelectMicrophonePayload.self, from: request.body)
+        } catch {
+            sendError(connection, status: 400, code: "invalid_request", message: "Request body must be valid JSON")
+            return
+        }
+
+        Task { @MainActor in
+            let mgr = MicrophoneManager.shared
+            mgr.refresh()
+            let rawTarget = payload.uid?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let target = rawTarget, !target.isEmpty,
+               target.lowercased() != "default",
+               target.lowercased() != "system",
+               target.lowercased() != "auto" {
+                guard let matched = mgr.availableDevices.first(where: {
+                    $0.uid == target || $0.name.localizedCaseInsensitiveCompare(target) == .orderedSame
+                }) else {
+                    sendError(connection, status: 404, code: "device_not_found", message: "Microphone not found: '\(target)'")
+                    return
+                }
+                mgr.selectDevice(uid: matched.uid)
+            } else {
+                mgr.selectDevice(uid: nil)
+            }
+
+            var resp: [String: Any] = [
+                "ok": true,
+                "selectedUID": mgr.selectedDeviceUID ?? NSNull()
+            ]
+            if let active = mgr.activeDevice {
+                resp["activeDevice"] = [
+                    "uid": active.uid,
+                    "name": active.name,
+                    "isBuiltIn": active.isBuiltIn
+                ]
+            }
+            sendJSON(connection, status: 200, object: resp)
         }
     }
 

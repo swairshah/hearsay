@@ -39,6 +39,8 @@ private struct Command {
             try history(rest)
         case "logs":
             try logs(rest)
+        case "mic", "microphone":
+            try await mic(rest)
         case "help", "--help", "-h":
             printHelp()
         default:
@@ -204,6 +206,175 @@ private struct Command {
           hearsay cancel REQUEST_ID
           hearsay history [--limit N] [--json]
           hearsay logs [--open] [--copy] [--path] [--clear]
+          hearsay mic <list|get|set>
+        """)
+    }
+
+    private func mic(_ arguments: [String]) async throws {
+        guard let action = arguments.first else {
+            printMicHelp()
+            return
+        }
+
+        let rest = Array(arguments.dropFirst())
+        switch action {
+        case "list", "ls":
+            try await micList(rest)
+        case "get", "current", "status":
+            try await micGet(rest)
+        case "set", "select":
+            try await micSet(rest)
+        case "help", "--help", "-h":
+            printMicHelp()
+        default:
+            throw CLIError("unknown mic command '\(action)'\n\nRun 'hearsay mic help' for usage.", exitCode: 64)
+        }
+    }
+
+    private func micList(_ arguments: [String]) async throws {
+        var parser = ArgumentParser(arguments)
+        let jsonOutput = parser.flag("--json")
+        try parser.rejectUnused()
+
+        let client = APIClient()
+        let data = try await client.request(method: "GET", path: "/v1/microphones")
+
+        if jsonOutput {
+            printPrettyJSON(data)
+            return
+        }
+
+        struct DeviceInfo: Decodable {
+            let uid: String
+            let name: String
+            let isBuiltIn: Bool
+            let isActive: Bool?
+            let isSelected: Bool?
+        }
+        struct MicListResponse: Decodable {
+            let devices: [DeviceInfo]
+            let activeDevice: DeviceInfo?
+            let selectedUID: String?
+        }
+
+        let resp = try JSONDecoder().decode(MicListResponse.self, from: data)
+        guard !resp.devices.isEmpty else {
+            print("No microphones found.")
+            return
+        }
+
+        for dev in resp.devices {
+            var badges: [String] = []
+            if dev.isActive == true {
+                badges.append("active")
+            }
+            if dev.isSelected == true {
+                badges.append("selected")
+            } else if dev.isActive == true && resp.selectedUID == nil {
+                badges.append("system default")
+            }
+            if dev.isBuiltIn {
+                badges.append("built-in")
+            }
+            let badgeStr = badges.isEmpty ? "" : " (\(badges.joined(separator: ", ")))"
+            let prefix = (dev.isActive == true) ? "* " : "  "
+            print("\(prefix)\(dev.name)\(badgeStr)")
+            print("    UID: \(dev.uid)")
+        }
+    }
+
+    private func micGet(_ arguments: [String]) async throws {
+        var parser = ArgumentParser(arguments)
+        let jsonOutput = parser.flag("--json")
+        try parser.rejectUnused()
+
+        let client = APIClient()
+        let data = try await client.request(method: "GET", path: "/v1/microphones/current")
+
+        if jsonOutput {
+            printPrettyJSON(data)
+            return
+        }
+
+        struct DeviceInfo: Decodable {
+            let uid: String
+            let name: String
+            let isBuiltIn: Bool
+        }
+        struct MicCurrentResponse: Decodable {
+            let activeDevice: DeviceInfo?
+            let selectedUID: String?
+        }
+
+        let resp = try JSONDecoder().decode(MicCurrentResponse.self, from: data)
+        if let active = resp.activeDevice {
+            let builtInStr = active.isBuiltIn ? " (Built-in)" : ""
+            print("Active: \(active.name)\(builtInStr)")
+            print("UID: \(active.uid)")
+            if let selectedUID = resp.selectedUID {
+                print("Selection: Explicit (\(selectedUID))")
+            } else {
+                print("Selection: System Default (auto)")
+            }
+        } else {
+            print("No active microphone.")
+        }
+    }
+
+    private func micSet(_ arguments: [String]) async throws {
+        var parser = ArgumentParser(arguments)
+        let jsonOutput = parser.flag("--json")
+        guard let target = parser.positionalArgument() else {
+            throw CLIError("Usage: hearsay mic set <name-or-uid|default> [--json]", exitCode: 64)
+        }
+        try parser.rejectUnused()
+
+        let client = APIClient()
+        let payload = ["uid": target]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let data = try await client.request(method: "POST", path: "/v1/microphones/select", body: body)
+
+        if jsonOutput {
+            printPrettyJSON(data)
+            return
+        }
+
+        struct DeviceInfo: Decodable {
+            let uid: String
+            let name: String
+            let isBuiltIn: Bool
+        }
+        struct MicSetResponse: Decodable {
+            let ok: Bool
+            let activeDevice: DeviceInfo?
+            let selectedUID: String?
+        }
+
+        let resp = try JSONDecoder().decode(MicSetResponse.self, from: data)
+        if let active = resp.activeDevice {
+            if resp.selectedUID == nil {
+                print("Microphone set to System Default (auto).")
+                print("Active: \(active.name) [\(active.uid)]")
+            } else {
+                print("Microphone selected: \(active.name)")
+                print("UID: \(active.uid)")
+            }
+        } else {
+            print("Microphone updated, but no active microphone detected.")
+        }
+    }
+
+    private func printMicHelp() {
+        print("""
+        Usage:
+          hearsay mic list [--json]
+          hearsay mic get [--json]
+          hearsay mic set <name-or-uid|default> [--json]
+
+        Commands:
+          list, ls          List available audio input devices
+          get, current      Show active microphone details
+          set, select       Select microphone by name/UID or reset with 'default'
         """)
     }
 }
@@ -442,6 +613,14 @@ private struct ArgumentParser {
             throw CLIError("\(name) requires an integer", exitCode: 64)
         }
         return value
+    }
+
+    mutating func positionalArgument() -> String? {
+        for (index, arg) in args.enumerated() where !used.contains(index) && !arg.hasPrefix("-") {
+            used.insert(index)
+            return arg
+        }
+        return nil
     }
 
     func rejectUnused() throws {

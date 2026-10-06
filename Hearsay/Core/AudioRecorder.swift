@@ -648,22 +648,33 @@ final class AudioRecorder {
             "attempt": "\(attempt)"
         ])
 
-        // Install tap on input — pass nil for format so AVAudioEngine uses the
-        // node's native format. This works correctly now that we skip setInputDevice
-        // for the default device (avoiding the format cache mismatch).
-        // For non-default devices, we reset the engine after setting the device,
-        // which also ensures the format is correct.
+        // Query hardware input format to configure the tap.
+        // Passing nil for format causes AVAudioEngine to use inputNode.outputFormat(forBus: 0),
+        // which defaults to 48kHz. If the hardware input device runs at a different rate
+        // (e.g. 16kHz for webcam microphones like the Logitech C920, 32kHz, or 96kHz),
+        // the rate mismatch between inputNode's input and output bus causes engine.start()
+        // to fail with Core Audio error -10868 (kAudioUnitErr_FormatNotSupported).
+        // Passing the hardware input format configures the node's output format to match.
+        let hwFormat = inputNode.inputFormat(forBus: 0)
+        let tapFormat: AVAudioFormat? = (hwFormat.sampleRate > 0 && hwFormat.channelCount > 0) ? hwFormat : nil
+
         let bufferSize: AVAudioFrameCount = 4096
         var cachedConverter: AVAudioConverter?
         var cachedSampleRate: Double = 0
         var cachedChannelCount: AVAudioChannelCount = 0
         var formatLoggedOnce = false
 
-        noteStartPhase("install_tap_begin", generation: generation, fields: [
+        var tapFields: [String: String] = [
             "attempt": "\(attempt)",
             "buffer_size": "\(bufferSize)"
-        ])
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, time in
+        ]
+        if let tapFormat {
+            tapFields["hw_sample_rate"] = "\(Int(tapFormat.sampleRate))"
+            tapFields["hw_channels"] = "\(tapFormat.channelCount)"
+        }
+
+        noteStartPhase("install_tap_begin", generation: generation, fields: tapFields)
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: tapFormat) { [weak self] buffer, time in
             guard let self = self else { return }
 
             let bufferFormat = buffer.format

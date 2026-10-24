@@ -128,6 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         diagnosticLog.event("app.terminate")
+        if PermissionsManager.shouldRelaunchAfterQuit {
+            logger.notice("Quit while Screen Recording is pending; reopening")
+            PermissionsManager.scheduleRelaunch()
+        }
         MeetingRecorder.shared.abandonForTermination()
         MeetingStore.shared.flush()
         hotkeyMonitor?.stop()
@@ -1477,25 +1481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingIndicator.setState(.error("Restarting app..."))
         recordingWindow.fadeIn()
 
-        let appURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-
-        NSWorkspace.shared.openApplication(at: appURL, configuration: config) { [weak self] _, error in
-            guard let self = self else { return }
-            DispatchQueue.main.async {
-                if let error {
-                    logger.error("Failed to relaunch app: \(error.localizedDescription)")
-                    diagnosticLog.event("app.relaunch_failed", level: .error, fields: diagnosticLog.errorFields(for: error))
-                    self.showError("Please restart Hearsay")
-                    self.didAutoRelaunchForRecorderFailure = false
-                    return
-                }
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    NSApp.terminate(nil)
-                }
-            }
+        PermissionsManager.scheduleRelaunch()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NSApp.terminate(nil)
         }
     }
     

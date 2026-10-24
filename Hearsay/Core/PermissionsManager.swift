@@ -64,8 +64,37 @@ final class PermissionsManager {
     /// Trigger screen recording permission prompt
     /// This will cause macOS to show the permission dialog if not already granted
     static func requestScreenRecording() {
+        screenRecordingRequestedAt = Date()
         // CGRequestScreenCaptureAccess triggers the system permission dialog (macOS 10.15+)
         CGRequestScreenCaptureAccess()
+    }
+
+    private static var screenRecordingRequestedAt: Date?
+
+    /// True shortly after we asked for Screen Recording and it isn't active yet.
+    /// System Settings then offers "Quit & Reopen", but it only quits menu-bar
+    /// (LSUIElement) apps — so we reopen ourselves on the way out.
+    static var shouldRelaunchAfterQuit: Bool {
+        guard let requestedAt = screenRecordingRequestedAt else { return false }
+        return Date().timeIntervalSince(requestedAt) < 10 * 60 && !CGPreflightScreenCaptureAccess()
+    }
+
+    // MARK: - Relaunch
+
+    /// Start a fresh copy of the app once this process has exited. The caller
+    /// still has to terminate. (`NSWorkspace.openApplication` on our own URL
+    /// just activates the running instance, so it can't be used for this.)
+    static func scheduleRelaunch() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = [
+            "-c",
+            "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$2\"",
+            "relaunch",
+            String(ProcessInfo.processInfo.processIdentifier),
+            Bundle.main.bundleURL.path
+        ]
+        try? task.run()
     }
     
     // MARK: - Open Settings

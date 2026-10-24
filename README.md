@@ -56,6 +56,20 @@ hearsay meetings show latest          # Markdown transcript
 hearsay meetings search "pricing"     # across every meeting
 ```
 
+## Vocabulary
+
+List the names and terms your meetings use (people, companies, products, jargon) in the **Vocabulary** pane, with how the speech model tends to mishear them. Hearsay swaps those mishearings for the right spelling in dictation and meeting transcripts, and gives the list to the LLM clean-up passes as a spelling reference.
+
+```bash
+hearsay vocab add HumanLayer --alias "human lair" --note "Dexter's company"
+hearsay vocab edit HumanLayer --add-alias humanlair
+hearsay vocab search human
+hearsay vocab remove HumanLayer
+hearsay vocab export --format fluidaudio   # term: alias, alias (one per line)
+```
+
+The list lives in `~/Library/Application Support/Hearsay/vocabulary.json`; CLI edits apply to the next transcription, with or without the app running.
+
 ## First launch
 
 1. Grant **Microphone** permission when prompted
@@ -75,6 +89,7 @@ Everything lives in one window with a sidebar:
 - **Models** — download, activate, and delete speech models: Qwen Fast (0.6B) / Quality (1.7B), Whisper tiny.en / small.en, Parakeet English (v2) / Multilingual (v3)
 - **Microphone** — pick your input device
 - **Replacements** — automatic text substitutions applied to transcripts
+- **Vocabulary** — names and terms to spell right, with how they tend to be misheard
 - **Cleanup** & **Post Processing** — rules and LLM-powered polishing for transcribed text
 - **Meetings** — calendar of recorded meetings, live and saved transcripts, search, clean-up, export
 - **History** — every transcription, click a line to copy it, retry failed ones

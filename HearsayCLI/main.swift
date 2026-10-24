@@ -45,6 +45,8 @@ private struct Command {
             try await meeting(rest)
         case "meetings":
             try await meetings(rest)
+        case "vocab", "vocabulary":
+            try vocab(rest)
         case "help", "--help", "-h":
             printHelp()
         default:
@@ -213,8 +215,10 @@ private struct Command {
           hearsay mic <list|get|set>
           hearsay meeting <start|stop|status>
           hearsay meetings [list|show|search|path]
+          hearsay vocab [list|search|add|edit|remove|path|export]
 
-        Run 'hearsay meetings help' for reading saved meeting transcripts.
+        Run 'hearsay meetings help' for reading saved meeting transcripts,
+        'hearsay vocab help' for names and terms the speech model should get right.
         """)
     }
 
@@ -460,6 +464,143 @@ private struct Command {
         IDs can be shortened to any unique prefix (the 8-character id from 'list').
         'show' prints the processed transcript; --original prints the raw speech-to-text.
         Transcripts live in \(MeetingPaths.rootDirectory.path)/<id>/ (meeting.json, transcript.md).
+        """)
+    }
+
+    // MARK: - Vocabulary
+
+    private func vocab(_ arguments: [String]) throws {
+        let action = arguments.first ?? "list"
+        var parser = ArgumentParser(Array(arguments.dropFirst()))
+        let url = Vocabulary.fileURL
+
+        switch action {
+        case "list", "ls":
+            let json = parser.flag("--json")
+            try parser.rejectUnused()
+            try printVocabulary(try Vocabulary.load(from: url).sorted, json: json, empty: "No vocabulary terms")
+
+        case "search", "find":
+            let json = parser.flag("--json")
+            guard let query = parser.positionalArgument() else {
+                throw CLIError("usage: hearsay vocab search <query> [--json]", exitCode: 64)
+            }
+            try parser.rejectUnused()
+            try printVocabulary(try Vocabulary.load(from: url).search(query), json: json, empty: "No terms match '\(query)'")
+
+        case "add":
+            let aliases = try parser.stringValues(after: "--alias")
+            let note = try parser.stringValue(after: "--note")
+            guard let text = parser.positionalArgument() else {
+                throw CLIError("usage: hearsay vocab add <term> [--alias A]... [--note N]", exitCode: 64)
+            }
+            try parser.rejectUnused()
+            var vocabulary = try Vocabulary.load(from: url)
+            let term = try vocabulary.add(text, aliases: aliases, note: note)
+            try vocabulary.save(to: url)
+            print("Added \(describe(term))")
+
+        case "edit", "update":
+            let newText = try parser.stringValue(after: "--text")
+            let replaceAliases = try parser.stringValues(after: "--alias")
+            let addAliases = try parser.stringValues(after: "--add-alias")
+            let removeAliases = try parser.stringValues(after: "--remove-alias")
+            let note = try parser.stringValue(after: "--note")
+            guard let reference = parser.positionalArgument() else {
+                throw CLIError("usage: hearsay vocab edit <term|id> [--text T] [--alias A]... [--add-alias A]... [--remove-alias A]... [--note N]", exitCode: 64)
+            }
+            try parser.rejectUnused()
+            var vocabulary = try Vocabulary.load(from: url)
+            guard var term = vocabulary.find(reference) else {
+                throw CLIError("no vocabulary term '\(reference)'")
+            }
+            if let newText { term.text = newText }
+            var aliases = replaceAliases.isEmpty ? term.aliases : replaceAliases
+            aliases += addAliases
+            let removing = Set(removeAliases.map(Vocabulary.matchKey))
+            aliases.removeAll { removing.contains(Vocabulary.matchKey($0)) }
+            term.aliases = aliases
+            if let note { term.setNote(note) }
+            try vocabulary.update(term)
+            try vocabulary.save(to: url)
+            print("Updated \(describe(vocabulary.find(term.text) ?? term))")
+
+        case "remove", "rm", "delete":
+            guard let reference = parser.positionalArgument() else {
+                throw CLIError("usage: hearsay vocab remove <term|id>", exitCode: 64)
+            }
+            try parser.rejectUnused()
+            var vocabulary = try Vocabulary.load(from: url)
+            guard let term = vocabulary.find(reference) else {
+                throw CLIError("no vocabulary term '\(reference)'")
+            }
+            vocabulary.remove(id: term.id)
+            try vocabulary.save(to: url)
+            print("Removed \(term.text)")
+
+        case "path":
+            try parser.rejectUnused()
+            print(url.path)
+
+        case "export":
+            let format = try parser.stringValue(after: "--format") ?? "json"
+            try parser.rejectUnused()
+            let vocabulary = try Vocabulary.load(from: url)
+            switch format {
+            case "json":
+                print(String(data: try MeetingCoding.makeEncoder().encode(vocabulary), encoding: .utf8) ?? "{}")
+            case "fluidaudio", "simple":
+                print(vocabulary.fluidAudioSimpleFormat(), terminator: "")
+            default:
+                throw CLIError("--format must be json or fluidaudio", exitCode: 64)
+            }
+
+        case "help", "--help", "-h":
+            printVocabHelp()
+
+        default:
+            throw CLIError("unknown vocab command '\(action)'", exitCode: 64)
+        }
+    }
+
+    private func printVocabulary(_ terms: [VocabularyTerm], json: Bool, empty: String) throws {
+        if json {
+            print(String(data: try MeetingCoding.makeEncoder().encode(terms), encoding: .utf8) ?? "[]")
+            return
+        }
+        if terms.isEmpty {
+            print(empty)
+            return
+        }
+        for term in terms {
+            print(describe(term))
+        }
+    }
+
+    private func describe(_ term: VocabularyTerm) -> String {
+        var line = "\(term.shortID)  \(term.text)"
+        if !term.aliases.isEmpty { line += "  ← \(term.aliases.joined(separator: ", "))" }
+        if let note = term.note { line += "  (\(note))" }
+        return line
+    }
+
+    private func printVocabHelp() {
+        print("""
+        Usage:
+          hearsay vocab [list] [--json]
+          hearsay vocab search <query> [--json]
+          hearsay vocab add <term> [--alias A]... [--note N]
+          hearsay vocab edit <term|id> [--text T] [--alias A]... [--add-alias A]... [--remove-alias A]... [--note N]
+          hearsay vocab remove <term|id>
+          hearsay vocab path
+          hearsay vocab export [--format json|fluidaudio]
+
+        Aliases are how the speech model mishears a term ("human lair" for HumanLayer);
+        Hearsay replaces them with the term in dictation and meeting transcripts, and the
+        LLM passes get the term list as a spelling reference. 'edit --alias' replaces all
+        aliases; --add-alias / --remove-alias change them one at a time. Changes apply to
+        the next transcription; the app doesn't need to be running.
+        File: \(Vocabulary.fileURL.path)
         """)
     }
 
@@ -919,6 +1060,21 @@ private struct ArgumentParser {
         }
         used.insert(valueIndex)
         return args[valueIndex]
+    }
+
+    /// Every value of a repeatable option (`--alias a --alias b`).
+    mutating func stringValues(after name: String) throws -> [String] {
+        var values: [String] = []
+        for (index, arg) in args.enumerated() where arg == name && !used.contains(index) {
+            let valueIndex = index + 1
+            guard valueIndex < args.count else {
+                throw CLIError("\(name) requires a value", exitCode: 64)
+            }
+            used.insert(index)
+            used.insert(valueIndex)
+            values.append(args[valueIndex])
+        }
+        return values
     }
 
     mutating func intValue(after name: String) throws -> Int? {

@@ -41,6 +41,10 @@ private struct Command {
             try logs(rest)
         case "mic", "microphone":
             try await mic(rest)
+        case "meeting":
+            try await meeting(rest)
+        case "meetings":
+            try await meetings(rest)
         case "help", "--help", "-h":
             printHelp()
         default:
@@ -207,6 +211,255 @@ private struct Command {
           hearsay history [--limit N] [--json]
           hearsay logs [--open] [--copy] [--path] [--clear]
           hearsay mic <list|get|set>
+          hearsay meeting <start|stop|status>
+          hearsay meetings [list|show|search|path]
+
+        Run 'hearsay meetings help' for reading saved meeting transcripts.
+        """)
+    }
+
+    // MARK: - Meetings
+
+    private func meeting(_ arguments: [String]) async throws {
+        guard let action = arguments.first else {
+            printMeetingHelp()
+            return
+        }
+        var parser = ArgumentParser(Array(arguments.dropFirst()))
+        let client = APIClient()
+
+        switch action {
+        case "start":
+            let title = try parser.stringValue(after: "--title")
+            let replayMic = try parser.stringValue(after: "--replay-mic")
+            let replaySystem = try parser.stringValue(after: "--replay-system")
+            let speed = try parser.stringValue(after: "--speed").map { raw -> Double in
+                guard let value = Double(raw), value > 0 else { throw CLIError("--speed requires a positive number", exitCode: 64) }
+                return value
+            }
+            try parser.rejectUnused()
+
+            var body: [String: Any] = [:]
+            if let title { body["title"] = title }
+            if replayMic != nil || replaySystem != nil {
+                var replay: [String: Any] = [:]
+                if let replayMic { replay["microphone"] = absolutePath(replayMic) }
+                if let replaySystem { replay["system"] = absolutePath(replaySystem) }
+                if let speed { replay["speed"] = speed }
+                body["replay"] = replay
+            }
+            let data = try await client.request(method: "POST", path: "/v1/meetings", body: try JSONSerialization.data(withJSONObject: body))
+            let response = try JSONDecoder().decode(MeetingStartResponse.self, from: data)
+            print(response.id)
+
+        case "stop":
+            let wait = parser.flag("--wait")
+            try parser.rejectUnused()
+            let data = try await client.request(method: "POST", path: "/v1/meetings/stop")
+            let response = try JSONDecoder().decode(MeetingStartResponse.self, from: data)
+            if wait {
+                stderr("Finishing transcript…")
+                while true {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                    let status = try JSONDecoder().decode(MeetingStatusResponse.self, from: try await client.request(method: "GET", path: "/v1/meetings/current"))
+                    if status.id != response.id { break }
+                }
+            }
+            print(response.id)
+
+        case "status":
+            let json = parser.flag("--json")
+            try parser.rejectUnused()
+            let data = try await client.request(method: "GET", path: "/v1/meetings/current")
+            if json {
+                printPrettyJSON(data)
+                return
+            }
+            let status = try JSONDecoder().decode(MeetingStatusResponse.self, from: data)
+            guard let id = status.id else {
+                print("Not recording")
+                return
+            }
+            let elapsed = MeetingTranscriptFormatter.timestamp(status.elapsedSeconds ?? 0)
+            print("\(status.phase ?? "recording")  \(elapsed)  \(status.title ?? "")  (\(status.shortId ?? id))")
+            print("\(status.segments ?? 0) lines · call audio: \(status.systemAudio == true ? "yes" : "no") · speakers: \(status.speakerDetection ?? "off")")
+
+        case "help", "--help", "-h":
+            printMeetingHelp()
+        default:
+            throw CLIError("unknown meeting command '\(action)'\n\nRun 'hearsay meeting help' for usage.", exitCode: 64)
+        }
+    }
+
+    private func meetings(_ arguments: [String]) async throws {
+        let action = arguments.first ?? "list"
+        let known = ["list", "ls", "show", "cat", "search", "path", "open", "help", "--help", "-h"]
+        // `hearsay meetings --limit 5` means list.
+        let rest = known.contains(action) ? Array(arguments.dropFirst()) : arguments
+        var parser = ArgumentParser(rest)
+        let library = MeetingLibrary()
+
+        switch known.contains(action) ? action : "list" {
+        case "list", "ls":
+            let limit = try parser.intValue(after: "--limit") ?? 20
+            let date = try parser.stringValue(after: "--date")
+            let json = parser.flag("--json")
+            try parser.rejectUnused()
+
+            var summaries = try library.summaries()
+            if let date {
+                let day = try parseDay(date)
+                summaries = summaries.filter { Calendar.current.isDate($0.startedAt, inSameDayAs: day) }
+            }
+            summaries = Array(summaries.prefix(max(0, limit)))
+            if json {
+                print(String(data: try MeetingCoding.makeEncoder().encode(summaries), encoding: .utf8) ?? "[]")
+                return
+            }
+            if summaries.isEmpty {
+                print("No meetings")
+                return
+            }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm"
+            for summary in summaries {
+                let duration = MeetingTranscriptFormatter.durationText(summary.durationSeconds)
+                let live = summary.status == .recording ? "  [recording]" : ""
+                print("\(summary.shortID)  \(formatter.string(from: summary.startedAt))  \(duration.padding(toLength: 9, withPad: " ", startingAt: 0))  \(summary.title)\(live)")
+            }
+
+        case "show", "cat":
+            let format = try parser.stringValue(after: "--format") ?? "markdown"
+            let original = parser.flag("--original")
+            let noTimestamps = parser.flag("--no-timestamps")
+            guard let reference = parser.positionalArgument() else {
+                throw CLIError("usage: hearsay meetings show <id|latest> [--format markdown|text|json] [--original] [--no-timestamps]", exitCode: 64)
+            }
+            try parser.rejectUnused()
+            let document = try library.document(matching: reference)
+            switch format {
+            case "markdown", "md":
+                print(MeetingTranscriptFormatter.markdown(for: document, original: original, timestamps: !noTimestamps))
+            case "text", "txt", "plain":
+                print(MeetingTranscriptFormatter.plainText(for: document, original: original, timestamps: !noTimestamps))
+            case "json":
+                print(String(data: try MeetingCoding.makeEncoder().encode(document), encoding: .utf8) ?? "{}")
+            default:
+                throw CLIError("--format must be markdown, text, or json", exitCode: 64)
+            }
+
+        case "search":
+            let limit = try parser.intValue(after: "--limit") ?? 50
+            let json = parser.flag("--json")
+            guard let query = parser.positionalArgument() else {
+                throw CLIError("usage: hearsay meetings search <query> [--limit N] [--json]", exitCode: 64)
+            }
+            try parser.rejectUnused()
+            var hits: [MeetingSearchHitOutput] = []
+            for summary in try library.summaries() {
+                guard let document = try? library.document(id: summary.id) else { continue }
+                for hit in MeetingSearch.hits(in: document, query: query) {
+                    guard let segment = document.segments.first(where: { $0.id == hit.segmentID }) else { continue }
+                    hits.append(MeetingSearchHitOutput(
+                        meetingId: document.id.uuidString,
+                        shortId: document.shortID,
+                        title: document.title,
+                        startedAt: document.startedAt,
+                        offsetSeconds: segment.start,
+                        speaker: document.speakerName(for: segment),
+                        text: segment.text
+                    ))
+                    if hits.count >= limit { break }
+                }
+                if hits.count >= limit { break }
+            }
+            if json {
+                print(String(data: try MeetingCoding.makeEncoder().encode(hits), encoding: .utf8) ?? "[]")
+                return
+            }
+            if hits.isEmpty {
+                print("No matches")
+                return
+            }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            for hit in hits {
+                print("\(hit.shortId) \(formatter.string(from: hit.startedAt)) [\(MeetingTranscriptFormatter.timestamp(hit.offsetSeconds))] \(hit.speaker): \(MeetingSearch.snippet(for: query, in: hit.text, radius: 70))")
+            }
+
+        case "open":
+            var body: [String: String] = [:]
+            if let view = try parser.stringValue(after: "--view") {
+                guard ["transcript", "reader", "speakers"].contains(view) else {
+                    throw CLIError("--view must be transcript, reader, or speakers", exitCode: 64)
+                }
+                body["view"] = view
+            }
+            if let reference = parser.positionalArgument() {
+                body["id"] = try library.document(matching: reference).id.uuidString
+            }
+            try parser.rejectUnused()
+            _ = try await APIClient().request(method: "POST", path: "/v1/meetings/open", body: try JSONEncoder().encode(body))
+
+        case "path":
+            guard let reference = parser.positionalArgument() else {
+                print(MeetingPaths.rootDirectory.path)
+                return
+            }
+            try parser.rejectUnused()
+            let document = try library.document(matching: reference)
+            print(MeetingPaths.directory(for: document.id).path)
+
+        default:
+            printMeetingsHelp()
+        }
+    }
+
+    private func parseDay(_ value: String) throws -> Date {
+        switch value.lowercased() {
+        case "today": return Date()
+        case "yesterday": return Date().addingTimeInterval(-86_400)
+        default:
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            guard let date = formatter.date(from: value) else {
+                throw CLIError("--date must be YYYY-MM-DD, today, or yesterday", exitCode: 64)
+            }
+            return date
+        }
+    }
+
+    private func absolutePath(_ path: String) -> String {
+        let expanded = (path as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") { return expanded }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(expanded).standardized.path
+    }
+
+    private func printMeetingHelp() {
+        print("""
+        Usage:
+          hearsay meeting start [--title TITLE]
+          hearsay meeting start --replay-mic FILE [--replay-system FILE] [--speed N]
+          hearsay meeting stop [--wait]
+          hearsay meeting status [--json]
+
+        'start --replay-*' runs audio files through the live pipeline instead of
+        the microphone and call audio (for testing). --speed 4 replays 4x faster.
+        """)
+    }
+
+    private func printMeetingsHelp() {
+        print("""
+        Usage:
+          hearsay meetings [list] [--limit N] [--date YYYY-MM-DD|today|yesterday] [--json]
+          hearsay meetings show <id|latest> [--format markdown|text|json] [--original] [--no-timestamps]
+          hearsay meetings search <query> [--limit N] [--json]
+          hearsay meetings path [<id|latest>]
+          hearsay meetings open [<id|latest>] [--view transcript|reader|speakers]
+
+        IDs can be shortened to any unique prefix (the 8-character id from 'list').
+        'show' prints the processed transcript; --original prints the raw speech-to-text.
+        Transcripts live in \(MeetingPaths.rootDirectory.path)/<id>/ (meeting.json, transcript.md).
         """)
     }
 
@@ -455,6 +708,69 @@ private struct DictationResult: Decodable {
 private struct APIErrorResponse: Decodable {
     let error: String
     let message: String
+}
+
+private struct MeetingStartResponse: Decodable {
+    let id: String
+}
+
+private struct MeetingStatusResponse: Decodable {
+    let recording: Bool
+    let phase: String?
+    let id: String?
+    let shortId: String?
+    let title: String?
+    let elapsedSeconds: Double?
+    let segments: Int?
+    let systemAudio: Bool?
+    let speakerDetection: String?
+}
+
+private struct MeetingSearchHitOutput: Encodable {
+    let meetingId: String
+    let shortId: String
+    let title: String
+    let startedAt: Date
+    let offsetSeconds: Double
+    let speaker: String
+    let text: String
+}
+
+/// Reads meetings straight from disk, so it works even when Hearsay isn't running.
+private struct MeetingLibrary {
+    func summaries() throws -> [MeetingSummary] {
+        if let data = try? Data(contentsOf: MeetingPaths.indexURL),
+           let summaries = try? MeetingCoding.makeDecoder().decode([MeetingSummary].self, from: data) {
+            return summaries.sorted { $0.startedAt > $1.startedAt }
+        }
+        // No index yet: scan the folders.
+        let entries = (try? FileManager.default.contentsOfDirectory(at: MeetingPaths.rootDirectory, includingPropertiesForKeys: nil)) ?? []
+        return entries
+            .compactMap { UUID(uuidString: $0.lastPathComponent) }
+            .compactMap { try? document(id: $0).summary() }
+            .sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func document(id: UUID) throws -> MeetingDocument {
+        let data = try Data(contentsOf: MeetingPaths.documentURL(for: id))
+        return try MeetingCoding.makeDecoder().decode(MeetingDocument.self, from: data)
+    }
+
+    /// "latest", a full UUID, or a unique id prefix.
+    func document(matching reference: String) throws -> MeetingDocument {
+        let summaries = try summaries()
+        if reference.lowercased() == "latest" || reference.lowercased() == "last" {
+            guard let latest = summaries.first else { throw CLIError("No meetings yet") }
+            return try document(id: latest.id)
+        }
+        let needle = reference.lowercased()
+        let matches = summaries.filter { $0.id.uuidString.lowercased().hasPrefix(needle) }
+        switch matches.count {
+        case 0: throw CLIError("No meeting matches '\(reference)'. Run 'hearsay meetings list'.")
+        case 1: return try document(id: matches[0].id)
+        default: throw CLIError("'\(reference)' matches \(matches.count) meetings; use more characters", exitCode: 64)
+        }
+    }
 }
 
 private struct HistoryReader {

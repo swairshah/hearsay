@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Network
 import os.log
@@ -9,6 +10,9 @@ protocol HearsayLocalAPIServerDelegate: AnyObject {
     @MainActor func startCallerDictation(request: DictationRequest) throws
     @MainActor func stopCallerDictation(requestId: UUID) throws
     @MainActor func cancelCallerDictation(requestId: UUID) throws
+    @MainActor func startMeeting(title: String?, replay: MeetingRecorder.ReplaySource?) throws -> UUID
+    @MainActor func stopMeeting() throws -> UUID
+    @MainActor func openMeeting(id: UUID?, view: String?) -> Bool
 }
 
 final class HearsayLocalAPIServer {
@@ -177,7 +181,145 @@ final class HearsayLocalAPIServer {
             return
         }
 
+        if request.method == "GET", components == ["v1", "meetings", "current"] {
+            handleMeetingStatus(on: connection)
+            return
+        }
+
+        if request.method == "POST", components == ["v1", "meetings"] {
+            handleStartMeeting(request, on: connection)
+            return
+        }
+
+        if request.method == "POST", components == ["v1", "meetings", "stop"] {
+            handleStopMeeting(on: connection)
+            return
+        }
+
+        // Debug only (launch with HEARSAY_DEBUG_API=1): render Hearsay's own
+        // windows to PNG so UI checks don't need Screen Recording permission.
+        if request.method == "POST", components == ["v1", "debug", "snapshot"],
+           ProcessInfo.processInfo.environment["HEARSAY_DEBUG_API"] == "1" {
+            Task { @MainActor in
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("HearsaySnapshots", isDirectory: true)
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                var paths: [String] = []
+                for (index, window) in NSApp.windows.enumerated() where window.isVisible {
+                    guard let view = window.contentView?.superview ?? window.contentView,
+                          let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    let url = directory.appendingPathComponent("window-\(index).png")
+                    if let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil {
+                        paths.append(url.path)
+                    }
+                }
+                self.sendJSON(connection, status: 200, object: ["paths": paths])
+            }
+            return
+        }
+
+        if request.method == "POST", components == ["v1", "meetings", "open"] {
+            let body = (try? JSONDecoder().decode([String: String].self, from: request.body)) ?? [:]
+            let id = body["id"].flatMap(UUID.init(uuidString:))
+            Task { @MainActor in
+                if self.delegate?.openMeeting(id: id, view: body["view"]) == true {
+                    self.sendJSON(connection, status: 200, object: ["ok": true])
+                } else {
+                    self.sendError(connection, status: 404, code: "not_found", message: "Meeting not found")
+                }
+            }
+            return
+        }
+
         sendError(connection, status: 404, code: "not_found", message: "Unknown endpoint")
+    }
+
+    // MARK: - Meetings
+
+    private struct StartMeetingPayload: Decodable {
+        struct Replay: Decodable {
+            let microphone: String?
+            let system: String?
+            let speed: Double?
+        }
+
+        let title: String?
+        /// Run audio files through the live pipeline instead of capturing (testing).
+        let replay: Replay?
+    }
+
+    private func handleMeetingStatus(on connection: NWConnection) {
+        Task { @MainActor in
+            guard let live = MeetingRecorder.shared.live,
+                  let document = MeetingStore.shared.document(id: live.meetingID) else {
+                sendJSON(connection, status: 200, object: ["recording": false])
+                return
+            }
+            let detection: String
+            switch live.speakerDetection {
+            case .off: detection = "off"
+            case .loading: detection = "loading"
+            case .active: detection = "active"
+            case .unavailable: detection = "unavailable"
+            }
+            sendJSON(connection, status: 200, object: [
+                "recording": live.phase == .recording,
+                "phase": live.phase == .recording ? "recording" : "finishing",
+                "id": document.id.uuidString,
+                "shortId": document.shortID,
+                "title": document.title,
+                "elapsedSeconds": live.elapsed,
+                "segments": document.visibleSegments.count,
+                "systemAudio": live.systemAudioAvailable,
+                "speakerDetection": detection
+            ] as [String: Any])
+        }
+    }
+
+    private func handleStartMeeting(_ request: HTTPRequest, on connection: NWConnection) {
+        let payload: StartMeetingPayload
+        if request.body.isEmpty {
+            payload = StartMeetingPayload(title: nil, replay: nil)
+        } else {
+            do {
+                payload = try JSONDecoder().decode(StartMeetingPayload.self, from: request.body)
+            } catch {
+                sendError(connection, status: 400, code: "invalid_request", message: "Request body must be valid JSON")
+                return
+            }
+        }
+
+        let replay = payload.replay.map {
+            MeetingRecorder.ReplaySource(
+                microphone: $0.microphone.map { URL(fileURLWithPath: $0) },
+                system: $0.system.map { URL(fileURLWithPath: $0) },
+                speed: $0.speed ?? 1
+            )
+        }
+
+        Task { @MainActor in
+            do {
+                guard let delegate else { throw MeetingRecorderError.captureFailed("Hearsay is not ready") }
+                let id = try delegate.startMeeting(title: payload.title, replay: replay)
+                sendJSON(connection, status: 200, object: ["ok": true, "id": id.uuidString])
+            } catch MeetingRecorderError.alreadyRecording {
+                sendError(connection, status: 409, code: "busy", message: "A meeting is already being recorded")
+            } catch {
+                sendError(connection, status: 500, code: "start_failed", message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func handleStopMeeting(on connection: NWConnection) {
+        Task { @MainActor in
+            do {
+                guard let delegate else { throw MeetingRecorderError.captureFailed("Hearsay is not ready") }
+                let id = try delegate.stopMeeting()
+                sendJSON(connection, status: 200, object: ["ok": true, "id": id.uuidString])
+            } catch {
+                sendError(connection, status: 409, code: "not_recording", message: error.localizedDescription)
+            }
+        }
     }
 
     private func handleHealth(on connection: NWConnection) {

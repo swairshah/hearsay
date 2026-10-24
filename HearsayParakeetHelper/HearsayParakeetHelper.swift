@@ -8,6 +8,8 @@ private struct HelperRequest: Codable {
     let command: String
     let model: String?
     let audioPath: String?
+    /// `diarize_assign`: `[start, end]` pairs in seconds from the session start.
+    var ranges: [[Double]]? = nil
 }
 
 private struct HelperResponse: Codable {
@@ -15,6 +17,8 @@ private struct HelperResponse: Codable {
     let ok: Bool
     let text: String?
     let error: String?
+    /// `diarize_assign`: dominant speaker slot per range, or -1 for "no speech found".
+    var speakers: [Int]? = nil
 }
 
 private enum HelperError: Error, LocalizedError {
@@ -23,6 +27,8 @@ private enum HelperError: Error, LocalizedError {
     case notInitialized
     case unsupportedCommand(String)
     case warmupAudioAllocationFailed
+    case diarizerNotStarted
+    case missingRanges
 
     var errorDescription: String? {
         switch self {
@@ -36,6 +42,10 @@ private enum HelperError: Error, LocalizedError {
             return "Unsupported command: \(command)"
         case .warmupAudioAllocationFailed:
             return "Unable to allocate Parakeet warmup audio"
+        case .diarizerNotStarted:
+            return "Diarization session has not been started"
+        case .missingRanges:
+            return "Missing ranges"
         }
     }
 }
@@ -84,10 +94,35 @@ private actor ParakeetRunner {
             let text = try await transcribe(URL(fileURLWithPath: audioPath))
             return HelperResponse(id: request.id, ok: true, text: text, error: nil)
 
+        case "diarize_start":
+            try await diarization.start()
+            return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
+
+        case "diarize_push":
+            guard let audioPath = request.audioPath else { throw HelperError.missingAudioPath }
+            try diarization.push(audioURL: URL(fileURLWithPath: audioPath))
+            return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
+
+        case "diarize_file":
+            guard let audioPath = request.audioPath else { throw HelperError.missingAudioPath }
+            try await diarization.processFile(URL(fileURLWithPath: audioPath))
+            return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
+
+        case "diarize_finish":
+            try diarization.finish()
+            return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
+
+        case "diarize_assign":
+            guard let ranges = request.ranges else { throw HelperError.missingRanges }
+            let speakers = try diarization.assign(ranges: ranges)
+            return HelperResponse(id: request.id, ok: true, text: nil, error: nil, speakers: speakers)
+
         default:
             throw HelperError.unsupportedCommand(request.command)
         }
     }
+
+    private let diarization = DiarizationSession()
 
     private func ensureLoaded(_ model: HelperParakeetModel) async throws {
         if currentModel == model, asr != nil {
@@ -160,6 +195,113 @@ private actor ParakeetRunner {
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url
+    }
+}
+
+/// Streaming speaker diarization (NVIDIA Sortformer via FluidAudio) for the
+/// remote side of a meeting. The app pushes system-audio chunks as they are
+/// recorded and asks which speaker slot dominated each transcribed segment.
+private final class DiarizationSession {
+    private static let config = SortformerConfig.balancedV2_1
+
+    private var models: SortformerModels?
+    private var diarizer: SortformerDiarizer?
+
+    /// Loads (downloading on first use) the Sortformer models and resets the session.
+    func start() async throws {
+        let models = try await loadModels()
+        let diarizer = SortformerDiarizer(config: Self.config)
+        diarizer.initialize(models: models)
+        self.diarizer = diarizer
+    }
+
+    func push(audioURL: URL) throws {
+        guard let diarizer else { throw HelperError.diarizerNotStarted }
+        let samples = try Self.readMonoSamples(audioURL)
+        guard !samples.isEmpty else { return }
+        try diarizer.addAudio(samples, sourceSampleRate: nil)
+        // `process()` consumes at most one model chunk per call; drain them all.
+        while try diarizer.process() != nil {}
+    }
+
+    /// Diarize a whole recording in one pass (used to re-run speaker detection).
+    func processFile(_ url: URL) async throws {
+        let models = try await loadModels()
+        let diarizer = SortformerDiarizer(config: Self.config)
+        diarizer.initialize(models: models)
+        _ = try diarizer.processComplete(audioFileURL: url, finalizeOnCompletion: true)
+        self.diarizer = diarizer
+    }
+
+    func finish() throws {
+        guard let diarizer else { throw HelperError.diarizerNotStarted }
+        _ = try diarizer.finalizeSession()
+    }
+
+    /// For each `[start, end]`, the speaker slot with the most overlapping speech
+    /// (finalized or still tentative), or -1 when nobody overlaps enough.
+    func assign(ranges: [[Double]]) throws -> [Int] {
+        guard let diarizer else { throw HelperError.diarizerNotStarted }
+        let speakers = diarizer.timeline.speakers
+
+        return ranges.map { range in
+            guard range.count == 2, range[1] > range[0] else { return -1 }
+            let start = Float(range[0])
+            let end = Float(range[1])
+
+            var best = -1
+            var bestOverlap: Float = 0
+            for (slot, speaker) in speakers {
+                var overlap: Float = 0
+                for segment in speaker.finalizedSegments + speaker.tentativeSegments {
+                    overlap += max(0, min(end, segment.endTime) - max(start, segment.startTime))
+                }
+                if overlap > bestOverlap {
+                    bestOverlap = overlap
+                    best = slot
+                }
+            }
+
+            // Require a meaningful share of the segment before trusting the label.
+            let minimum = min(0.4, (end - start) * 0.2)
+            return bestOverlap >= minimum ? best : -1
+        }
+    }
+
+    private func loadModels() async throws -> SortformerModels {
+        if let models { return models }
+        let loaded = try await SortformerModels.loadFromHuggingFace(
+            config: Self.config,
+            cacheDirectory: Self.cacheDirectory()
+        )
+        models = loaded
+        return loaded
+    }
+
+    /// Keep diarizer models next to the ASR models (Hearsay sets XDG_CACHE_HOME).
+    private static func cacheDirectory() -> URL? {
+        guard let root = ProcessInfo.processInfo.environment["XDG_CACHE_HOME"], !root.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent("fluidaudio/Models", isDirectory: true)
+    }
+
+    private static func readMonoSamples(_ url: URL) throws -> [Float] {
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        guard file.length > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else {
+            return []
+        }
+        try file.read(into: buffer)
+        guard let channels = buffer.floatChannelData else { return [] }
+        let count = Int(buffer.frameLength)
+        if format.sampleRate == 16_000, format.channelCount == 1 {
+            return Array(UnsafeBufferPointer(start: channels[0], count: count))
+        }
+        let converter = AudioConverter(sampleRate: 16_000)
+        return try converter.resampleAudioFile(url)
     }
 }
 

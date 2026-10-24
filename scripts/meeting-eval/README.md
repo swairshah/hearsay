@@ -31,3 +31,35 @@ bound and a regression check, then sanity-check with a real recorded call
 UI checks without Screen Recording permission: launch the app with
 `HEARSAY_DEBUG_API=1`, open a meeting with `hearsay meetings open <id> --view reader`,
 then `POST /v1/debug/snapshot` on the local API renders Hearsay's windows to PNGs.
+
+## Accurate pass experiment (offline)
+
+Re-processes a saved meeting the slow way and compares it with the live
+transcript, without changing the app:
+
+- each live utterance is re-transcribed to get per-word timings (`utterwords`),
+- speakers are detected over the whole call track at once (FluidAudio offline
+  pyannote + VBx), each word gets a speaker, and lines split where it changes,
+- local LLMs are asked to name the speakers from the conversation.
+
+```bash
+# Tools: FluidAudio's CLI (speaker detection) and utterwords (word timings).
+# Both build against the FluidAudio checkout from an Xcode build of the app.
+swift build -c release --package-path build/SourcePackages/checkouts/FluidAudio \
+    --scratch-path /tmp/fa --product fluidaudiocli
+swift build -c release --package-path scripts/meeting-eval/utterwords --scratch-path /tmp/uw
+
+scripts/meeting-eval/accurate_pass.py latest --out /tmp/pass \
+    --fluidaudio /tmp/fa/release/fluidaudiocli --utterwords /tmp/uw/release/utterwords \
+    --llm "gguf:$HOME/Library/Application Support/Hearsay/CleanupModels/Qwen3.5-0.8B-Q4_K_M.gguf"
+open /tmp/pass/comparison.html     # live and accurate side by side
+
+# Same comparison on a fixture, scored against ground truth.
+scripts/meeting-eval/make_fixture.py --out /tmp/fx/b2b --gap 0.15 --voice carol=Fred
+scripts/meeting-eval/compare_fixture.py /tmp/fx/b2b \
+    --fluidaudio /tmp/fa/release/fluidaudiocli --utterwords /tmp/uw/release/utterwords
+```
+
+`--vocab terms.txt` (with `--rerun-text`) tries FluidAudio's CTC vocabulary
+boosting. With default thresholds it replaced many ordinary words with
+vocabulary terms ("work" → "Warp", "such" → "Zach"), so it is not used.

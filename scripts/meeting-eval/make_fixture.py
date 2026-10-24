@@ -82,6 +82,8 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--echo", action="store_true", help="leak the call into the mic at -18 dB")
     parser.add_argument("--overlap", action="store_true", help="make some turns start before the previous one ends")
+    parser.add_argument("--gap", type=float, default=GAP_SECONDS,
+                        help="seconds between turns; below ~0.7 the live segmenter hears back-to-back speakers as one utterance")
     parser.add_argument("--voice", action="append", default=[], metavar="SPEAKER=VOICE",
                         help="override a speaker's `say` voice, e.g. carol=Fred (repeatable)")
     args = parser.parse_args()
@@ -108,7 +110,7 @@ def main():
             "end": round((start + len(audio)) / RATE, 3),
             "text": text,
         })
-        cursor = start + len(audio) + int(GAP_SECONDS * RATE)
+        cursor = start + len(audio) + int(args.gap * RATE)
 
     total = cursor + int(LEAD_SECONDS * RATE)
     for track in (mic, system):

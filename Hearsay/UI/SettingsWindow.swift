@@ -655,27 +655,14 @@ private class KeyboardShortcutsTabView: NSView {
 
     private let scrollView = NSScrollView()
     private let content = FlippedView()
-    private let titleLabel = NSTextField(labelWithString: "Keyboard Shortcuts")
-    private let subtitleLabel = NSTextField(labelWithString: "Global shortcuts work from any app. Click one to change it.")
+    private let column = NSStackView()
 
-    private let dictationBox = NSBox()
-    private let activationLabel = NSTextField(labelWithString: "Activation")
     private let activationPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let activationSeparator = NSBox()
     private var holdRow: ShortcutRowView!
     private var toggleRow: ShortcutRowView!
-
-    private let screenshotBox = NSBox()
     private var screenshotRow: ShortcutRowView!
     private var fullScreenshotRow: ShortcutRowView!
-
-    private let meetingBox = NSBox()
     private var meetingRow: ShortcutRowView!
-
-    private let resetButton = NSButton(title: "Reset to Defaults", target: nil, action: nil)
-
-    private let referenceBox = NSBox()
-    private var referenceRows: [(label: NSTextField, keys: NSTextField)] = []
 
     /// Fixed shortcuts, shown for reference.
     private static let reference: [(String, String)] = [
@@ -687,8 +674,6 @@ private class KeyboardShortcutsTabView: NSView {
         ("Search all meetings", "⇧⌘F"),
         ("Choose the highlighted button in a prompt", "Return"),
     ]
-
-    private static let rowHeight: CGFloat = 40
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -702,49 +687,73 @@ private class KeyboardShortcutsTabView: NSView {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        content.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = content
         addSubview(scrollView)
 
-        titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
-        content.addSubview(titleLabel)
-        subtitleLabel.font = .systemFont(ofSize: 12)
-        subtitleLabel.textColor = .secondaryLabelColor
-        content.addSubview(subtitleLabel)
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = Theme.Space.sectionGap
+        column.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(column)
 
-        for (box, title) in [(dictationBox, "Dictation"), (screenshotBox, "Screenshots While Dictating"),
-                             (meetingBox, "Meetings"), (referenceBox, "Inside Hearsay")] {
-            box.title = title
-            box.titleFont = .systemFont(ofSize: 12, weight: .semibold)
-            content.addSubview(box)
-        }
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            content.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            column.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            column.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            column.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            column.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+        ])
 
-        activationLabel.font = .systemFont(ofSize: 13)
-        dictationBox.contentView?.addSubview(activationLabel)
+        let heading = NSStackView()
+        heading.orientation = .vertical
+        heading.alignment = .leading
+        heading.spacing = 4
+        let title = NSTextField(labelWithString: "Keyboard Shortcuts")
+        title.font = .systemFont(ofSize: 20, weight: .bold)
+        let subtitle = NSTextField(labelWithString: "Global shortcuts work from any app. Click one to change it.")
+        subtitle.font = .systemFont(ofSize: 12)
+        subtitle.textColor = .secondaryLabelColor
+        heading.addArrangedSubview(title)
+        heading.addArrangedSubview(subtitle)
+        addToColumn(heading)
+
+        // Dictation
+        let dictation = CardSectionView(title: "Dictation", spacing: 0)
         activationPicker.addItems(withTitles: ["Hold", "Double-Tap"])
         activationPicker.font = .systemFont(ofSize: 12)
         activationPicker.target = self
         activationPicker.action = #selector(activationChanged(_:))
-        dictationBox.contentView?.addSubview(activationPicker)
-        activationSeparator.boxType = .separator
-        dictationBox.contentView?.addSubview(activationSeparator)
-
+        dictation.addRow(labelledRow("Activation", trailing: activationPicker, trailingWidth: 130))
         holdRow = ShortcutRowView(label: "Hold to Record", captureMode: .singleModifier, placeholder: "Click to set",
-                                  canClear: false, showSeparator: true) { [weak self] s in
+                                  canClear: false, showSeparator: false) { [weak self] s in
             UserDefaults.standard.set(s.keyCode, forKey: "holdKeyCode")
             self?.onHotkeyChanged?()
         }
-        toggleRow = comboRow("Toggle Record", keyCodeKey: "toggleStartKeyCode", modifiersKey: "toggleStartModifiers", separator: false)
-        dictationBox.contentView?.addSubview(holdRow)
-        dictationBox.contentView?.addSubview(toggleRow)
+        toggleRow = comboRow("Toggle Record", keyCodeKey: "toggleStartKeyCode", modifiersKey: "toggleStartModifiers")
+        addShortcutRows([holdRow, toggleRow], to: dictation)
+        addToColumn(dictation)
 
-        screenshotRow = comboRow("Take Screenshot", keyCodeKey: "screenshotKeyCode", modifiersKey: "screenshotModifiers", separator: true)
-        fullScreenshotRow = comboRow("Full-Screen Screenshot", keyCodeKey: "fullScreenshotKeyCode", modifiersKey: "fullScreenshotModifiers", separator: false)
-        screenshotBox.contentView?.addSubview(screenshotRow)
-        screenshotBox.contentView?.addSubview(fullScreenshotRow)
+        // Screenshots
+        let screenshots = CardSectionView(title: "Screenshots While Dictating", spacing: 0)
+        screenshotRow = comboRow("Take Screenshot", keyCodeKey: "screenshotKeyCode", modifiersKey: "screenshotModifiers")
+        fullScreenshotRow = comboRow("Full-Screen Screenshot", keyCodeKey: "fullScreenshotKeyCode", modifiersKey: "fullScreenshotModifiers")
+        addShortcutRows([screenshotRow, fullScreenshotRow], to: screenshots)
+        addToColumn(screenshots)
 
+        // Meetings
+        let meetings = CardSectionView(title: "Meetings", spacing: 0)
         meetingRow = comboRow("Record / Stop Meeting", keyCodeKey: HotkeyMonitor.meetingKeyCodeKey,
-                              modifiersKey: HotkeyMonitor.meetingModifiersKey, separator: false)
-        meetingBox.contentView?.addSubview(meetingRow)
+                              modifiersKey: HotkeyMonitor.meetingModifiersKey)
+        addShortcutRows([meetingRow], to: meetings)
+        addToColumn(meetings)
 
         // Each combo shortcut must differ from the others.
         let combos: [(String, ShortcutRowView)] = [
@@ -762,29 +771,64 @@ private class KeyboardShortcutsTabView: NSView {
             }
         }
 
+        let resetButton = NSButton(title: "Reset to Defaults", target: self, action: #selector(resetToDefaults(_:)))
         resetButton.bezelStyle = .rounded
         resetButton.controlSize = .small
-        resetButton.target = self
-        resetButton.action = #selector(resetToDefaults(_:))
-        content.addSubview(resetButton)
+        let resetRow = NSStackView(views: [NSView(), resetButton])
+        resetRow.orientation = .horizontal
+        addToColumn(resetRow)
+        column.setCustomSpacing(Theme.Space.sectionGap + 4, after: resetRow)
 
+        // Reference
+        let inside = CardSectionView(title: "Inside Hearsay", spacing: 0)
         for (title, keys) in Self.reference {
-            let label = NSTextField(labelWithString: title)
-            label.font = .systemFont(ofSize: 13)
-            label.lineBreakMode = .byTruncatingTail
             let keyLabel = NSTextField(labelWithString: keys)
             keyLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
             keyLabel.textColor = .secondaryLabelColor
             keyLabel.alignment = .right
-            referenceBox.contentView?.addSubview(label)
-            referenceBox.contentView?.addSubview(keyLabel)
-            referenceRows.append((label, keyLabel))
+            inside.addRow(labelledRow(title, trailing: keyLabel, trailingWidth: 110, height: 28))
+        }
+        addToColumn(inside)
+    }
+
+    private func addToColumn(_ view: NSView) {
+        column.addArrangedSubview(view)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+    }
+
+    private func addShortcutRows(_ rows: [ShortcutRowView], to card: CardSectionView) {
+        for row in rows {
+            card.addRow(row)
+            row.heightAnchor.constraint(equalToConstant: 40).isActive = true
         }
     }
 
-    private func comboRow(_ label: String, keyCodeKey: String, modifiersKey: String, separator: Bool) -> ShortcutRowView {
+    /// Label on the left, a fixed-width control on the right.
+    private func labelledRow(_ text: String, trailing: NSView, trailingWidth: CGFloat, height: CGFloat = 40) -> NSView {
+        let row = NSView()
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 13)
+        label.lineBreakMode = .byTruncatingTail
+        for view in [label, trailing] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: height),
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -8),
+            trailing.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            trailing.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            trailing.widthAnchor.constraint(equalToConstant: trailingWidth),
+        ])
+        return row
+    }
+
+    private func comboRow(_ label: String, keyCodeKey: String, modifiersKey: String) -> ShortcutRowView {
         ShortcutRowView(label: label, captureMode: .keyCombo, placeholder: "Not set",
-                        canClear: true, showSeparator: separator) { [weak self] s in
+                        canClear: true, showSeparator: false) { [weak self] s in
             UserDefaults.standard.set(s.keyCode, forKey: keyCodeKey)
             UserDefaults.standard.set(Int(s.modifiers), forKey: modifiersKey)
             self?.onHotkeyChanged?()
@@ -809,75 +853,6 @@ private class KeyboardShortcutsTabView: NSView {
 
     private func updateHoldRowLabel() {
         holdRow.setLabel(activationPicker.indexOfSelectedItem == 1 ? "Record Key" : "Hold to Record")
-    }
-
-    override func layout() {
-        super.layout()
-        scrollView.frame = bounds
-        let pad: CGFloat = 20
-        let width = max(bounds.width - pad * 2, 300)
-        let rowH = Self.rowHeight
-        var y: CGFloat = 16
-
-        titleLabel.frame = NSRect(x: pad, y: y, width: width, height: 26)
-        y += 28
-        subtitleLabel.frame = NSRect(x: pad, y: y, width: width, height: 16)
-        y += 30
-
-        func place(_ box: NSBox, rows: Int) -> CGFloat {
-            // NSBox adds its title above the content; ~24pt covers it.
-            let height = rowH * CGFloat(rows) + 30
-            box.frame = NSRect(x: pad, y: y, width: width, height: height)
-            y += height + 12
-            return box.contentView?.bounds.height ?? 0
-        }
-
-        func layoutRows(_ rows: [NSView], in box: NSBox, top: CGFloat) {
-            guard let contentView = box.contentView else { return }
-            let inset: CGFloat = 12
-            var rowTop = contentView.bounds.height - 4 - top
-            for row in rows {
-                rowTop -= rowH
-                row.frame = NSRect(x: inset, y: rowTop, width: contentView.bounds.width - inset * 2, height: rowH)
-            }
-        }
-
-        _ = place(dictationBox, rows: 3)
-        if let contentView = dictationBox.contentView {
-            let inset: CGFloat = 12
-            let rowW = contentView.bounds.width - inset * 2
-            let top = contentView.bounds.height - 4 - rowH
-            let pickerW: CGFloat = 130
-            activationLabel.frame = NSRect(x: inset, y: top + (rowH - 18) / 2, width: rowW - pickerW - 8, height: 18)
-            activationPicker.frame = NSRect(x: contentView.bounds.width - inset - pickerW, y: top + (rowH - 26) / 2, width: pickerW, height: 26)
-            activationSeparator.frame = NSRect(x: inset, y: top, width: rowW, height: 1)
-            layoutRows([holdRow, toggleRow], in: dictationBox, top: rowH)
-        }
-        _ = place(screenshotBox, rows: 2)
-        layoutRows([screenshotRow, fullScreenshotRow], in: screenshotBox, top: 0)
-        _ = place(meetingBox, rows: 1)
-        layoutRows([meetingRow], in: meetingBox, top: 0)
-
-        resetButton.sizeToFit()
-        resetButton.frame.origin = NSPoint(x: pad + width - resetButton.frame.width, y: y - 4)
-        y += resetButton.frame.height + 12
-
-        let lineH: CGFloat = 26
-        let referenceH = lineH * CGFloat(referenceRows.count) + 34
-        referenceBox.frame = NSRect(x: pad, y: y, width: width, height: referenceH)
-        if let contentView = referenceBox.contentView {
-            let inset: CGFloat = 12
-            let keysW: CGFloat = 110
-            var lineTop = contentView.bounds.height - 6
-            for (label, keys) in referenceRows {
-                lineTop -= lineH
-                label.frame = NSRect(x: inset, y: lineTop + 4, width: contentView.bounds.width - inset * 2 - keysW, height: 18)
-                keys.frame = NSRect(x: contentView.bounds.width - inset - keysW, y: lineTop + 4, width: keysW, height: 18)
-            }
-        }
-        y += referenceH + 20
-
-        content.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(y, bounds.height))
     }
 
     @objc private func activationChanged(_ sender: NSPopUpButton) {
@@ -2302,7 +2277,8 @@ private class ShortcutRowView: NSView {
         let recorderW: CGFloat = 200
         let h = bounds.height
         
-        label.frame = NSRect(x: 0, y: 0, width: bounds.width - recorderW - 12, height: h)
+        let labelH = label.intrinsicContentSize.height
+        label.frame = NSRect(x: 0, y: (h - labelH) / 2, width: bounds.width - recorderW - 12, height: labelH)
         recorder.frame = NSRect(x: bounds.width - recorderW, y: (h - 28) / 2, width: recorderW, height: 28)
         separator.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 1)
     }

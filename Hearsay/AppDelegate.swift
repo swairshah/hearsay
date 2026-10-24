@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var localAPIServer: HearsayLocalAPIServer?
     private var onboardingWindowController: OnboardingWindowController?
     private var settingsWindowController: SettingsWindowController?
+    private let callDetector = MeetingCallDetector()
     
     // MARK: - Dev Mode
     
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMicrophoneManager()
         setupHotkeyMonitor()
         setupLocalAPI()
+        setupMeetings()
         
         // Check if we need to show onboarding (permissions or model missing)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -83,8 +85,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard MeetingRecorder.shared.isActive else { return .terminateNow }
+
+        if MeetingRecorder.shared.isRecording {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "A meeting is being recorded"
+            alert.informativeText = "Stop and save it before quitting? Hearsay finishes transcribing the last few seconds first."
+            alert.addButton(withTitle: "Stop & Quit")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        }
+
+        // Finish in the background, then quit. Don't wait forever.
+        var replied = false
+        let reply = {
+            guard !replied else { return }
+            replied = true
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        if MeetingRecorder.shared.isRecording {
+            MeetingRecorder.shared.stop(reason: .appQuitting) {
+                MeetingStore.shared.flush()
+                reply()
+            }
+        } else {
+            // Already finishing: wait for it.
+            MeetingRecorder.shared.addObserver { event in
+                if case .finished = event {
+                    MeetingStore.shared.flush()
+                    reply()
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            MeetingRecorder.shared.abandonForTermination()
+            reply()
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         diagnosticLog.event("app.terminate")
+        MeetingRecorder.shared.abandonForTermination()
+        MeetingStore.shared.flush()
         hotkeyMonitor?.stop()
         localAPIServer?.stop()
         indicatorDismissWorkItem?.cancel()
@@ -190,6 +235,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 text: name ?? "No model",
                 enabled: name != nil
             )
+        }
+
+        statusBar.onToggleMeetingRecording = { [weak self] in
+            self?.toggleMeetingRecording()
+        }
+
+        statusBar.onShowMeetings = { [weak self] in
+            self?.showMeetings()
+        }
+
+        statusBar.onShowLiveMeeting = { [weak self] in
+            if let id = MeetingRecorder.shared.currentMeetingID {
+                self?.showMeeting(id)
+            } else {
+                self?.showMeetings()
+            }
         }
 
         statusBar.onQuit = {
@@ -315,6 +376,167 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    // MARK: - Meetings
+
+    private func setupMeetings() {
+        MeetingStore.shared.recoverInterruptedMeetings(except: nil)
+
+        MeetingRecorder.shared.transcriberProvider = { [weak self] in
+            guard let self else { return nil }
+            if self.transcriber == nil { _ = self.configureTranscriberIfAvailable() }
+            return self.transcriber
+        }
+        MeetingPostProcessor.shared.cleanupManagerProvider = { [weak self] in
+            self?.cleanupManager
+        }
+
+        MeetingRecorder.shared.addObserver { [weak self] event in
+            self?.handleMeetingEvent(event)
+        }
+
+        callDetector.onCallStarted = { [weak self] call in
+            self?.offerToRecord(call)
+        }
+        callDetector.onCallEnded = { [weak self] call in
+            self?.offerToStop(after: call)
+        }
+        updateCallDetector()
+        NotificationCenter.default.addObserver(forName: .meetingSettingsChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.updateCallDetector()
+        }
+    }
+
+    private func updateCallDetector() {
+        if MeetingSettings.suggestRecordingOnCalls {
+            callDetector.start()
+        } else {
+            callDetector.stop()
+        }
+    }
+
+    func toggleMeetingRecording() {
+        let recorder = MeetingRecorder.shared
+        if recorder.isRecording {
+            recorder.stop()
+            return
+        }
+        guard !recorder.isActive else { return }
+        startMeetingRecording(source: callDetector.activeCall?.name)
+    }
+
+    @discardableResult
+    private func startMeetingRecording(source: String?, title: String? = nil) -> UUID? {
+        MeetingPromptPanel.shared.dismiss()
+        do {
+            return try MeetingRecorder.shared.start(title: title, source: source)
+        } catch MeetingRecorderError.transcriberUnavailable {
+            showMeetingAlert("No speech model installed", "Download a model in Models, then try again.")
+            showModels()
+        } catch MeetingRecorderError.microphonePermissionMissing {
+            showMeetingAlert("Microphone access needed", "Allow Hearsay to use the microphone in System Settings › Privacy & Security.")
+            showPermissions()
+        } catch {
+            showMeetingAlert("Couldn't start recording", error.localizedDescription)
+        }
+        return nil
+    }
+
+    private func handleMeetingEvent(_ event: MeetingRecorderEvent) {
+        switch event {
+        case .started(let id):
+            statusBar.showMeetingRecordingState(true)
+            SoundPlayer.shared.play(.recordingStart)
+            if settingsWindowController?.window?.isVisible == true {
+                showMeeting(id)
+            }
+        case .stopping:
+            statusBar.showMeetingRecordingState(false)
+            SoundPlayer.shared.play(.recordingStop)
+            MeetingPromptPanel.shared.dismiss()
+        case .finished(let id):
+            statusBar.showMeetingRecordingState(false)
+            guard let document = MeetingStore.shared.document(id: id) else { return }
+            MeetingPromptPanel.shared.show(.init(
+                symbol: "checkmark",
+                tone: .success,
+                title: "Meeting saved",
+                message: "\(document.title) · \(MeetingTranscriptFormatter.durationText(document.duration())) · \(document.visibleSegments.count) lines",
+                primaryTitle: "Open",
+                secondaryTitle: "Dismiss",
+                timeout: 8,
+                onPrimary: { [weak self] in self?.showMeeting(id) },
+                onSecondary: nil,
+                onDismiss: nil
+            ))
+        case .silenceReminder(let minutes):
+            MeetingPromptPanel.shared.show(.init(
+                symbol: "waveform.slash",
+                tone: .recording,
+                title: "Still in the meeting?",
+                message: "No one has spoken for \(minutes) minutes. Hearsay is still recording.",
+                primaryTitle: "Stop Recording",
+                secondaryTitle: "Keep Going",
+                timeout: nil,
+                onPrimary: { MeetingRecorder.shared.stop() },
+                onSecondary: { MeetingRecorder.shared.snoozeSilenceReminder() },
+                onDismiss: { MeetingRecorder.shared.snoozeSilenceReminder() }
+            ))
+        case .autoStopped(_, let minutes):
+            logger.info("Meeting auto-stopped after \(minutes) silent minutes")
+        case .failed(let message):
+            showError(message)
+        case .liveUpdated:
+            break
+        }
+    }
+
+    private func offerToRecord(_ call: MeetingCallDetector.Call) {
+        guard !MeetingRecorder.shared.isActive, MeetingSettings.suggestRecordingOnCalls else { return }
+        diagnosticLog.event("meeting.call_detected", fields: ["app": call.name])
+        MeetingPromptPanel.shared.show(.init(
+            symbol: "phone.connection",
+            tone: .neutral,
+            title: "\(call.name) call started",
+            message: "Record and transcribe it on this Mac?",
+            primaryTitle: "Record",
+            secondaryTitle: "Not Now",
+            timeout: 25,
+            onPrimary: { [weak self] in self?.startMeetingRecording(source: call.name) },
+            onSecondary: nil,
+            onDismiss: nil
+        ))
+    }
+
+    private func offerToStop(after call: MeetingCallDetector.Call) {
+        if !MeetingRecorder.shared.isActive {
+            // The "record?" card is stale once the call is over.
+            MeetingPromptPanel.shared.dismiss()
+            return
+        }
+        guard MeetingRecorder.shared.isRecording else { return }
+        MeetingPromptPanel.shared.show(.init(
+            symbol: "phone.down",
+            tone: .recording,
+            title: "\(call.name) call ended",
+            message: "Stop recording and save the transcript?",
+            primaryTitle: "Stop Recording",
+            secondaryTitle: "Keep Going",
+            timeout: nil,
+            onPrimary: { MeetingRecorder.shared.stop() },
+            onSecondary: nil,
+            onDismiss: nil
+        ))
+    }
+
+    private func showMeetingAlert(_ title: String, _ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     // MARK: - Permissions & Onboarding
     
     private var permissionCheckTimer: Timer?
@@ -1447,7 +1669,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.retryFailedTranscription(item, completion: completion)
         }
         controller.isTranscriptionInProgress = { [weak self] in
-            self?.isTranscribing ?? false
+            (self?.isTranscribing ?? false) || MeetingRecorder.shared.isActive
+        }
+        controller.onToggleMeetingRecording = { [weak self] in
+            self?.toggleMeetingRecording()
         }
         controller.onCleanupSettingsChanged = { [weak self] in
             guard let self = self else { return }
@@ -1479,11 +1704,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showModels() {
         ensureSettingsWindowController().show(tab: .models)
     }
+
+    private func showMeetings() {
+        ensureSettingsWindowController().show(tab: .meetings)
+    }
+
+    private func showMeeting(_ id: UUID) {
+        ensureSettingsWindowController().showMeeting(id)
+    }
 }
 
 // MARK: - Local API
 
 extension AppDelegate: HearsayLocalAPIServerDelegate {
+    @MainActor
+    func startMeeting(title: String?, replay: MeetingRecorder.ReplaySource?) throws -> UUID {
+        try MeetingRecorder.shared.start(title: title, source: replay == nil ? callDetector.activeCall?.name : nil, replay: replay)
+    }
+
+    @MainActor
+    func openMeeting(id: UUID?, view: String?) -> Bool {
+        guard let id else {
+            showMeetings()
+            return true
+        }
+        guard MeetingStore.shared.document(id: id) != nil else { return false }
+        let mode: MeetingDetailView.Mode?
+        switch view {
+        case "reader": mode = .reader
+        case "speakers": mode = .speakers
+        case "transcript": mode = .transcript
+        default: mode = nil
+        }
+        ensureSettingsWindowController().showMeeting(id, mode: mode)
+        return true
+    }
+
+    @MainActor
+    func stopMeeting() throws -> UUID {
+        guard MeetingRecorder.shared.isRecording, let id = MeetingRecorder.shared.currentMeetingID else {
+            throw MeetingRecorderError.captureFailed("No meeting is being recorded")
+        }
+        MeetingRecorder.shared.stop()
+        return id
+    }
+
     @MainActor
     func localAPIState() -> DictationState {
         currentDictationState

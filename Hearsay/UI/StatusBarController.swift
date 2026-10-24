@@ -11,6 +11,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var modelItem: NSMenuItem!
     private var historySubmenu: NSMenu!
     private var historyMenuItem: NSMenuItem!
+    private var meetingItem: NSMenuItem!
+    private var liveTranscriptItem: NSMenuItem!
+    private var meetingMenuTimer: Timer?
+
+    /// Dictation and meeting recording each turn the icon red; track both so
+    /// one finishing doesn't clear the other.
+    private var isDictating = false
+    private var isRecordingMeeting = false
 
     /// Anchor the inline "Recent" section is rebuilt around, plus the rows we
     /// currently own so they can be swapped out without rebuilding the menu.
@@ -34,6 +42,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     var onRevealDiagnosticLog: (() -> Void)?
     var onClearDiagnosticLogs: (() -> Void)?
     var onCopyHistoryItem: ((TranscriptionItem) -> Void)?
+    var onToggleMeetingRecording: (() -> Void)?
+    var onShowMeetings: (() -> Void)?
+    /// Opens the Meetings pane on the meeting being recorded.
+    var onShowLiveMeeting: (() -> Void)?
     var onQuit: (() -> Void)?
     /// Mirrors the active model name so other chrome (e.g. the window's sidebar
     /// footer) can show the same status without re-deriving it.
@@ -85,6 +97,28 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         openWindowItem.target = self
         openWindowItem.isEnabled = true
         menu.addItem(openWindowItem)
+
+        menu.addItem(.separator())
+
+        // Meeting recording
+        meetingItem = NSMenuItem(title: "Record Meeting", action: #selector(toggleMeetingRecording(_:)), keyEquivalent: "m")
+        meetingItem.target = self
+        meetingItem.isEnabled = true
+        meetingItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+        menu.addItem(meetingItem)
+
+        liveTranscriptItem = NSMenuItem(title: "Show Live Transcript", action: #selector(showLiveMeeting(_:)), keyEquivalent: "")
+        liveTranscriptItem.target = self
+        liveTranscriptItem.isEnabled = true
+        liveTranscriptItem.isHidden = true
+        menu.addItem(liveTranscriptItem)
+
+        let meetingsItem = NSMenuItem(title: "Meetings…", action: #selector(showMeetings(_:)), keyEquivalent: "")
+        meetingsItem.target = self
+        meetingsItem.isEnabled = true
+        menu.addItem(meetingsItem)
+
+        menu.addItem(.separator())
         
         // Toggle enabled
         toggleItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled(_:)), keyEquivalent: "")
@@ -272,6 +306,42 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         refreshHistorySections()
+        refreshMeetingItem()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === self.menu, isRecordingMeeting else { return }
+        // Keep the elapsed time ticking while the menu is open (menu tracking
+        // runs the loop in event-tracking mode, hence `.common`).
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refreshMeetingItem() }
+        RunLoop.main.add(timer, forMode: .common)
+        meetingMenuTimer = timer
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
+        meetingMenuTimer?.invalidate()
+        meetingMenuTimer = nil
+    }
+
+    private func refreshMeetingItem() {
+        let recorder = MeetingRecorder.shared
+        if let live = recorder.live {
+            if live.phase == .recording {
+                meetingItem.title = "Stop Recording Meeting  (\(MeetingTranscriptFormatter.timestamp(live.elapsed)))"
+                meetingItem.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: nil)
+                meetingItem.isEnabled = true
+            } else {
+                meetingItem.title = "Saving Meeting…"
+                meetingItem.isEnabled = false
+            }
+            liveTranscriptItem.isHidden = false
+        } else {
+            meetingItem.title = "Record Meeting"
+            meetingItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+            meetingItem.isEnabled = true
+            liveTranscriptItem.isHidden = true
+        }
     }
     
     // MARK: - Public
@@ -299,15 +369,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
     
     func showRecordingState(_ isRecording: Bool) {
-        if let button = statusItem.button {
-            if isRecording {
-                // Change to red tint during recording
-                button.contentTintColor = Constants.recordingDot
-            } else {
-                // Reset to normal (template mode handles dark/light)
-                button.contentTintColor = nil
-            }
-        }
+        isDictating = isRecording
+        updateRecordingTint()
+    }
+
+    func showMeetingRecordingState(_ isRecording: Bool) {
+        isRecordingMeeting = isRecording
+        updateRecordingTint()
+        refreshMeetingItem()
+        statusItem.button?.toolTip = isRecording ? "Hearsay — recording a meeting" : nil
+    }
+
+    private func updateRecordingTint() {
+        guard let button = statusItem.button else { return }
+        // Red while anything records; nil restores the template (dark/light) tint.
+        button.contentTintColor = (isDictating || isRecordingMeeting) ? Constants.recordingDot : nil
     }
     
     // MARK: - Actions
@@ -328,6 +404,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         onToggleEnabled?(isEnabled)
     }
     
+    @objc private func toggleMeetingRecording(_ sender: NSMenuItem) {
+        onToggleMeetingRecording?()
+    }
+
+    @objc private func showMeetings(_ sender: NSMenuItem) {
+        onShowMeetings?()
+    }
+
+    @objc private func showLiveMeeting(_ sender: NSMenuItem) {
+        onShowLiveMeeting?()
+    }
+
     @objc private func showHistory(_ sender: NSMenuItem) {
         onShowHistory?()
     }

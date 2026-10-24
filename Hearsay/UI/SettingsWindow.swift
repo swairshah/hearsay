@@ -15,6 +15,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case shortcuts
         case postProcessing
         case about
+        case meetings
     }
     
     var onHotkeyChanged: (() -> Void)?
@@ -26,6 +27,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onRetryTranscription: ((TranscriptionItem, @escaping (Bool) -> Void) -> Void)?
     /// Returns true while a transcription is running; used to block model deletion.
     var isTranscriptionInProgress: (() -> Bool)?
+    /// Start or stop meeting recording (provided by AppDelegate).
+    var onToggleMeetingRecording: (() -> Void)?
     
     /// Sidebar navigation + a container that swaps in one pane at a time
     /// (replaces the old top-tab `NSTabView`).
@@ -45,6 +48,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var shortcutsTab: ShortcutReplacementTabView!
     private var postProcessingTab: CleanupTabView!
     private var aboutTab: AboutTabView!
+    private var meetingsTab: MeetingsPaneView!
     
     convenience init() {
         let window = NSWindow(
@@ -90,6 +94,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             NavEntry(id: "postProcessing", title: "Post Processing", symbol: "wand.and.stars"),
         ]),
         ("Library", [
+            NavEntry(id: "meetings", title: "Meetings", symbol: "person.2.wave.2"),
             NavEntry(id: "history", title: "History", symbol: "clock"),
         ]),
         ("App", [
@@ -177,7 +182,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         aboutTab = AboutTabView(frame: paneFrame)
 
+        meetingsTab = MeetingsPaneView(frame: paneFrame)
+        meetingsTab.onToggleRecording = { [weak self] in self?.onToggleMeetingRecording?() }
+
         panes = [
+            "meetings": meetingsTab,
             "settings": settingsTab,
             "models": modelsTab,
             "microphone": microphoneTab,
@@ -278,6 +287,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         for item in sidebarItems {
             item.isActive = (item.identifier_ == id)
         }
+        adjustWindowSize(forPane: id)
 
         // The Settings pane owns the shortcut recorder, so it needs key capture.
         if id == "settings" {
@@ -285,6 +295,36 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         } else {
             onWindowClosed?()
         }
+    }
+
+    /// The Meetings pane needs room for its calendar column next to the transcript.
+    private func adjustWindowSize(forPane id: String) {
+        guard let window else { return }
+        let meetingsMinimum = NSSize(width: 1000, height: 640)
+        if id == "meetings" {
+            window.minSize = meetingsMinimum
+            var frame = window.frame
+            let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
+            let targetWidth = min(max(frame.width, 1120), visible.width)
+            let targetHeight = min(max(frame.height, 760), visible.height)
+            if targetWidth != frame.width || targetHeight != frame.height {
+                frame.origin.x -= (targetWidth - frame.width) / 2
+                frame.origin.y -= targetHeight - frame.height
+                frame.size = NSSize(width: targetWidth, height: targetHeight)
+                frame.origin.x = max(visible.minX, min(frame.origin.x, visible.maxX - frame.width))
+                frame.origin.y = max(visible.minY, frame.origin.y)
+                window.setFrame(frame, display: true, animate: window.isVisible)
+            }
+        } else {
+            window.minSize = NSSize(width: 780, height: 560)
+        }
+    }
+
+    /// Open the Meetings pane on a specific meeting (optionally highlighting a search).
+    func showMeeting(_ id: UUID, query: String? = nil, mode: MeetingDetailView.Mode? = nil) {
+        show(tab: .meetings)
+        meetingsTab.reveal(meetingID: id, query: query)
+        if let mode { meetingsTab.detailView.setMode(mode) }
     }
 
     /// Reflected in the sidebar footer (model name + enabled dot).
@@ -301,6 +341,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         shortcutsTab.refresh()
         postProcessingTab.refresh()
         aboutTab.refresh()
+        meetingsTab.refresh()
         
         let paneID: String
         switch tab {
@@ -313,6 +354,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .shortcuts: paneID = "shortcuts"
         case .postProcessing: paneID = "postProcessing"
         case .about: paneID = "about"
+        case .meetings: paneID = "meetings"
         }
         selectPane(paneID, animated: false)
         

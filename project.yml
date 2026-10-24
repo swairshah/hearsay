@@ -23,6 +23,7 @@ targets:
     platform: macOS
     sources:
       - Hearsay
+      - HearsayShared
     settings:
       base:
         INFOPLIST_FILE: Hearsay/Info.plist
@@ -78,6 +79,7 @@ targets:
     platform: macOS
     sources:
       - HearsayCLI
+      - HearsayShared
     settings:
       base:
         PRODUCT_NAME: hearsay

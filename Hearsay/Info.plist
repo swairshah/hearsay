@@ -24,6 +24,8 @@
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Hearsay records call audio while you record a meeting, so the other participants appear in your transcript. Everything stays on your Mac.</string>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Hearsay needs accessibility access to detect the Option key globally and insert transcribed text at your cursor.</string>
 	<key>NSHumanReadableCopyright</key>

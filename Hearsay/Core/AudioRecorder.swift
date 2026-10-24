@@ -493,7 +493,7 @@ final class AudioRecorder {
     }
 
     /// Returns the system default input device ID
-    private static func defaultInputDeviceID() -> AudioDeviceID? {
+    static func defaultInputDeviceID() -> AudioDeviceID? {
         var deviceID: AudioDeviceID = 0
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var address = AudioObjectPropertyAddress(
@@ -791,7 +791,7 @@ final class AudioRecorder {
     }
 
     /// Gets the AudioDeviceID for a given device UID
-    private static func audioDeviceID(for uid: String) -> AudioDeviceID? {
+    static func audioDeviceID(for uid: String) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,

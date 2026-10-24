@@ -43,7 +43,7 @@ Everything stays on your Mac. Call audio needs macOS 14.2+ and the *System Audio
 - **Live transcript** with words appearing while people talk (Parakeet and Whisper models)
 - **Calendar** of recorded days; pick a day to list its meetings, or search across all meetings
 - **Three views**: Transcript (timeline, editable), Reader (selectable document), Speakers (talk time, rename, merge)
-- **Clean-up passes**: filler-word rules or a local LLM polish, with undo and "restore original"
+- **Clean-up**: filler-word rules run by themselves when a meeting ends; "Show Original Text" and "Restore Original Transcript" are in the … menu
 - **Copy** the transcript, or **share / export Markdown**
 - **Reminders**: asks whether the meeting is over after a few silent minutes, stops by itself after a longer silence, and offers to record when a call app starts using the mic
 

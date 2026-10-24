@@ -178,6 +178,7 @@ struct MeetingAudioFiles: Codable, Equatable {
 struct MeetingProcessingPass: Codable, Equatable {
     enum Kind: String, Codable {
         case cleanup
+        /// No longer run; kept so older meetings still decode.
         case llm
         case revert
     }

@@ -42,7 +42,6 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
     private let nextMatchButton = NSButton()
     private let copyButton = NSButton()
     private let shareButton = NSButton()
-    private let processButton = NSButton()
     private let moreButton = NSButton()
     private let toolbarLine = Theme.makeHairline()
 
@@ -50,7 +49,6 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
     private let processingBar = AdaptiveBackgroundView(color: Theme.wash(0.04))
     private let processingSpinner = NSProgressIndicator()
     private let processingLabel = NSTextField(labelWithString: "")
-    private let processingCancel = NSButton(title: "Cancel", target: nil, action: nil)
     private var isProcessing = false
 
     // Content
@@ -151,7 +149,6 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         configureIconButton(nextMatchButton, symbol: "chevron.down", tip: "Next match (↩)", action: #selector(nextMatch))
         configureIconButton(copyButton, symbol: "doc.on.doc", tip: "Copy transcript", action: #selector(copyTranscript))
         configureIconButton(shareButton, symbol: "square.and.arrow.up", tip: "Share or export Markdown", action: #selector(showShareMenu))
-        configureIconButton(processButton, symbol: "wand.and.stars", tip: "Clean up the transcript", action: #selector(showProcessMenu))
         configureIconButton(moreButton, symbol: "ellipsis.circle", tip: "More", action: #selector(showMoreMenu))
 
         addSubview(toolbarLine)
@@ -177,11 +174,6 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         processingLabel.font = .systemFont(ofSize: 12)
         processingLabel.textColor = .secondaryLabelColor
         processingBar.addSubview(processingLabel)
-        processingCancel.bezelStyle = .inline
-        processingCancel.controlSize = .small
-        processingCancel.target = self
-        processingCancel.action = #selector(cancelProcessing)
-        processingBar.addSubview(processingCancel)
         processingBar.isHidden = true
     }
 
@@ -618,74 +610,8 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
 
     // MARK: - Post-processing
 
-    @objc private func showProcessMenu() {
-        guard let meetingID else { return }
-        let processor = MeetingPostProcessor.shared
-        let menu = NSMenu()
-        let busy = isProcessing || isBeingRecorded
-
-        let cleanup = item("Clean Up Filler Words", symbol: "sparkles", action: #selector(runCleanupPass))
-        cleanup.isEnabled = !busy
-        cleanup.toolTip = "Applies your Cleanup rules and Replacements to every utterance."
-        menu.addItem(cleanup)
-
-        let llm = item("Polish with Local LLM…", symbol: "wand.and.stars", action: #selector(runLLMPass))
-        llm.isEnabled = !busy && processor.isLLMAvailable
-        llm.toolTip = processor.isLLMAvailable
-            ? "Rewrites each utterance with the on-device post-processing model."
-            : "Download a model in Post Processing to enable this."
-        menu.addItem(llm)
-
-        menu.addItem(.separator())
-        let undo = item("Undo Last Pass", symbol: "arrow.uturn.backward", action: #selector(undoPass))
-        undo.isEnabled = !busy && processor.canUndo(meetingID)
-        menu.addItem(undo)
-
-        let revert = item("Restore Original Transcript", symbol: "clock.arrow.circlepath", action: #selector(revertAll))
-        revert.isEnabled = !busy && (document?.hasProcessedText == true || document?.segments.contains { $0.edited == true } == true)
-        menu.addItem(revert)
-
-        menu.addItem(.separator())
-        let original = item("Show Original Text", symbol: nil, action: #selector(toggleOriginal))
-        original.state = showOriginal ? .on : .off
-        menu.addItem(original)
-
-        if let passes = document?.processingPasses, let last = passes.last {
-            menu.addItem(.separator())
-            let formatter = RelativeDateTimeFormatter()
-            let label: String
-            switch last.kind {
-            case .cleanup: label = "Clean-up"
-            case .llm: label = "LLM polish"
-            case .revert: label = "Restore"
-            }
-            let info = NSMenuItem(title: "Last: \(label), \(formatter.localizedString(for: last.date, relativeTo: Date()))", action: nil, keyEquivalent: "")
-            info.isEnabled = false
-            menu.addItem(info)
-        }
-        popUp(menu, from: processButton)
-    }
-
     @objc private func runCleanupPass() {
         run(.cleanup, label: "Cleaning up filler words…")
-    }
-
-    @objc private func runLLMPass() {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Polish with Local LLM"
-        alert.informativeText = "Each utterance is rewritten on this Mac using the prompt below. Your hand edits are kept, and you can undo the pass or restore the original at any time."
-        alert.addButton(withTitle: "Polish")
-        alert.addButton(withTitle: "Cancel")
-
-        let editor = PromptEditorAccessory(prompt: MeetingPostProcessor.llmPrompt)
-        alert.accessoryView = editor
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            let prompt = editor.prompt
-            MeetingPostProcessor.llmPrompt = prompt
-            self?.run(.llm(prompt: prompt), label: "Polishing with the local LLM…")
-        }
     }
 
     private func run(_ pass: MeetingPostProcessor.Pass, label: String) {
@@ -699,7 +625,7 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
             self.setProcessing(false, label: "")
             switch result {
             case .success(let changed):
-                self.showToast(changed == 0 ? "Nothing needed changing" : "Updated \(changed) utterance\(changed == 1 ? "" : "s"). Undo is in the wand menu.")
+                self.showToast(changed == 0 ? "Nothing needed changing" : "Cleaned up \(changed) utterance\(changed == 1 ? "" : "s"). Restore the original from the … menu.")
             case .failure(let error):
                 self.showToast(error.localizedDescription)
             }
@@ -707,22 +633,11 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         })
     }
 
-    @objc private func cancelProcessing() {
-        MeetingPostProcessor.shared.cancel()
-        processingLabel.stringValue = "Stopping…"
-    }
-
-    @objc private func undoPass() {
-        guard let meetingID else { return }
-        MeetingPostProcessor.shared.undoLastPass(meetingID)
-        reload()
-    }
-
     @objc private func revertAll() {
         guard let meetingID, let window else { return }
         let alert = NSAlert()
         alert.messageText = "Restore the original transcript?"
-        alert.informativeText = "Every utterance goes back to the speech model's output, including ones you edited by hand. You can undo this once."
+        alert.informativeText = "Every utterance goes back to the speech model's output, including ones you edited by hand. Clean Up Filler Words can then be run again."
         alert.addButton(withTitle: "Restore")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -742,17 +657,16 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         let refining = meetingID.map(MeetingSpeakerTools.isRefining) ?? false
         if refining, !isProcessing {
             showsRefinement = true
-            setProcessing(true, label: "Detecting speakers over the whole recording…", cancellable: false)
+            setProcessing(true, label: "Detecting speakers over the whole recording…")
         } else if !refining, showsRefinement {
             showsRefinement = false
             setProcessing(false, label: "")
         }
     }
 
-    private func setProcessing(_ processing: Bool, label: String, cancellable: Bool = true) {
+    private func setProcessing(_ processing: Bool, label: String) {
         isProcessing = processing
         processingBar.isHidden = !processing
-        processingCancel.isHidden = !cancellable
         processingLabel.stringValue = label
         if processing {
             processingSpinner.startAnimation(nil)
@@ -773,6 +687,24 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
             ? "Detect speakers over the whole saved call audio and split lines where the speaker changes."
             : "Needs saved call audio."
         menu.addItem(redetect)
+
+        // Clean-up runs by itself after recording; this covers older meetings
+        // and transcripts that were restored to the original.
+        let busy = isProcessing || isBeingRecorded
+        if document?.hasProcessedText == false {
+            let cleanup = item("Clean Up Filler Words", symbol: "sparkles", action: #selector(runCleanupPass))
+            cleanup.isEnabled = !busy
+            cleanup.toolTip = "Applies your Cleanup rules and Replacements to every utterance."
+            menu.addItem(cleanup)
+        }
+        let original = item("Show Original Text", symbol: "text.quote", action: #selector(toggleOriginal))
+        original.state = showOriginal ? .on : .off
+        original.toolTip = "Show exactly what the speech model heard, before clean-up and edits."
+        menu.addItem(original)
+        let revert = item("Restore Original Transcript…", symbol: "clock.arrow.circlepath", action: #selector(revertAll))
+        revert.isEnabled = !busy && (document?.hasProcessedText == true || document?.segments.contains { $0.edited == true } == true)
+        menu.addItem(revert)
+
         menu.addItem(.separator())
         let delete = item("Delete Meeting…", symbol: "trash", action: #selector(deleteMeeting))
         delete.isEnabled = !isBeingRecorded
@@ -783,7 +715,7 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
 
     @objc private func redetectSpeakers() {
         guard let meetingID else { return }
-        setProcessing(true, label: "Detecting speakers…", cancellable: false)
+        setProcessing(true, label: "Detecting speakers…")
         MeetingSpeakerTools.refineSpeakers(meetingID: meetingID) { [weak self] result in
             self?.setProcessing(false, label: "")
             switch result {
@@ -876,12 +808,12 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
             : "Original: \u{201C}\(segment.originalText)\u{201D}"
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        let editor = PromptEditorAccessory(prompt: segment.text, height: 120, showsReset: false)
+        let editor = TextEditorAccessory(text: segment.text)
         alert.accessoryView = editor
         alert.window.initialFirstResponder = editor.textView
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn, let meetingID = self?.meetingID else { return }
-            let text = editor.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = editor.text.trimmingCharacters(in: .whitespacesAndNewlines)
             MeetingStore.shared.modify(id: meetingID) { doc in
                 guard let index = doc.segments.firstIndex(where: { $0.id == segmentID }) else { return }
                 doc.segments[index].text = text.isEmpty ? doc.segments[index].originalText : text
@@ -1000,7 +932,7 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
 
     private func setChromeHidden(_ hidden: Bool) {
         let chrome: [NSView] = [titleField, metaLabel, modeControl, searchField, matchLabel, previousMatchButton,
-                                nextMatchButton, copyButton, shareButton, processButton, moreButton, toolbarLine,
+                                nextMatchButton, copyButton, shareButton, moreButton, toolbarLine,
                                 transcriptView, readerView, speakersView]
         for view in chrome {
             if hidden {
@@ -1054,12 +986,12 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         metaLabel.frame = NSRect(x: padding, y: y, width: width - padding * 2, height: 16)
         y += 26
 
-        // Toolbar: [mode]  [search][n of m][↑][↓]  ……  [copy][share][wand][…]
+        // Toolbar: [mode]  [search][n of m][↑][↓]  ……  [copy][share][…]
         modeControl.sizeToFit()
         modeControl.frame.origin = NSPoint(x: padding, y: y)
         let iconSize = NSSize(width: 30, height: 26)
         var x = width - padding
-        for button in [moreButton, processButton, shareButton, copyButton] {
+        for button in [moreButton, shareButton, copyButton] {
             x -= iconSize.width
             button.frame = NSRect(origin: NSPoint(x: x, y: y - 1), size: iconSize)
             x -= 2
@@ -1083,9 +1015,7 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         if !processingBar.isHidden {
             processingBar.frame = NSRect(x: 0, y: y, width: width, height: 32)
             processingSpinner.frame = NSRect(x: padding, y: 8, width: 16, height: 16)
-            processingCancel.sizeToFit()
-            processingCancel.frame.origin = NSPoint(x: width - padding - processingCancel.frame.width, y: (32 - processingCancel.frame.height) / 2)
-            processingLabel.frame = NSRect(x: padding + 24, y: 8, width: processingCancel.frame.minX - padding - 32, height: 16)
+            processingLabel.frame = NSRect(x: padding + 24, y: 8, width: width - padding * 2 - 24, height: 16)
             y += 32
         }
 
@@ -1153,46 +1083,31 @@ final class LevelMeterView: NSView {
     }
 }
 
-/// Multi-line text editor used as an NSAlert accessory (LLM prompt, segment text).
-final class PromptEditorAccessory: NSView {
+/// Multi-line text editor used as an NSAlert accessory (editing a line).
+final class TextEditorAccessory: NSView {
     let textView = NSTextView()
-    private let defaultPrompt: String?
 
-    var prompt: String { textView.string }
+    var text: String { textView.string }
 
-    init(prompt: String, height: CGFloat = 200, showsReset: Bool = true) {
-        defaultPrompt = showsReset ? MeetingPostProcessor.defaultLLMPrompt : nil
-        super.init(frame: NSRect(x: 0, y: 0, width: 460, height: height + (showsReset ? 28 : 0)))
+    init(text: String, height: CGFloat = 120) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 460, height: height))
 
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: showsReset ? 28 : 0, width: 460, height: height))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: height))
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         textView.frame = NSRect(x: 0, y: 0, width: 440, height: height)
         textView.isRichText = false
         textView.font = .systemFont(ofSize: 12.5)
-        textView.string = prompt
+        textView.string = text
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.allowsUndo = true
         scroll.documentView = textView
         addSubview(scroll)
-
-        if showsReset {
-            let reset = NSButton(title: "Reset to Default", target: self, action: #selector(resetPrompt))
-            reset.bezelStyle = .inline
-            reset.controlSize = .small
-            reset.sizeToFit()
-            reset.frame.origin = NSPoint(x: 0, y: 2)
-            addSubview(reset)
-        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func resetPrompt() {
-        if let defaultPrompt { textView.string = defaultPrompt }
-    }
 }
 
 /// Menu item that runs a closure.

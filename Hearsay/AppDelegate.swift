@@ -396,9 +396,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.transcriber == nil { _ = self.configureTranscriberIfAvailable() }
             return self.transcriber
         }
-        MeetingPostProcessor.shared.cleanupManagerProvider = { [weak self] in
-            self?.cleanupManager
-        }
 
         MeetingRecorder.shared.addObserver { [weak self] event in
             self?.handleMeetingEvent(event)

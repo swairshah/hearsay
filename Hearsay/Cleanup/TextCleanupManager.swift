@@ -86,7 +86,10 @@ final class TextCleanupManager {
             return nil
         }
         
-        let activePrompt = prompt ?? CleanupSettings.prompt
+        var activePrompt = prompt ?? CleanupSettings.prompt
+        if let reference = VocabularyStore.shared.current.promptReference() {
+            activePrompt += "\n\n" + reference
+        }
         let formattedInput = TextCleaner.formatInput(text)
         
         llm.useResolvedTemplate(systemPrompt: activePrompt)

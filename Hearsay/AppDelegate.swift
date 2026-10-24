@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotkeyMonitor()
         setupLocalAPI()
         setupMeetings()
+        VocabularyStore.shared.startWatching()
         
         // Check if we need to show onboarding (permissions or model missing)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

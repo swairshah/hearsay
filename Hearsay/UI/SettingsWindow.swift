@@ -16,6 +16,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case postProcessing
         case about
         case meetings
+        case vocabulary
     }
     
     var onHotkeyChanged: (() -> Void)?
@@ -49,6 +50,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var postProcessingTab: CleanupTabView!
     private var aboutTab: AboutTabView!
     private var meetingsTab: MeetingsPaneView!
+    private var vocabularyTab: VocabularyPaneView!
     
     convenience init() {
         let window = NSWindow(
@@ -90,6 +92,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ]),
         ("Text", [
             NavEntry(id: "shortcuts", title: "Replacements", symbol: "arrow.left.arrow.right"),
+            NavEntry(id: "vocabulary", title: "Vocabulary", symbol: "character.book.closed"),
             NavEntry(id: "cleanup", title: "Cleanup", symbol: "sparkles"),
             NavEntry(id: "postProcessing", title: "Post Processing", symbol: "wand.and.stars"),
         ]),
@@ -173,6 +176,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         microphoneTab = MicrophoneTabView(frame: paneFrame)
         shortcutsTab = ShortcutReplacementTabView(frame: paneFrame)
+        vocabularyTab = VocabularyPaneView(frame: paneFrame)
         cleanupTab = DeterministicCleanupTabView(frame: paneFrame)
 
         postProcessingTab = CleanupTabView(frame: paneFrame)
@@ -191,6 +195,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             "models": modelsTab,
             "microphone": microphoneTab,
             "shortcuts": shortcutsTab,
+            "vocabulary": vocabularyTab,
             "cleanup": cleanupTab,
             "postProcessing": postProcessingTab,
             "history": historyTab,
@@ -339,6 +344,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         microphoneTab.refresh()
         cleanupTab.refresh()
         shortcutsTab.refresh()
+        vocabularyTab.refresh()
         postProcessingTab.refresh()
         aboutTab.refresh()
         meetingsTab.refresh()
@@ -355,6 +361,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .postProcessing: paneID = "postProcessing"
         case .about: paneID = "about"
         case .meetings: paneID = "meetings"
+        case .vocabulary: paneID = "vocabulary"
         }
         selectPane(paneID, animated: false)
         

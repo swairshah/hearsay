@@ -98,7 +98,7 @@ enum TranscriptProcessingSettings {
 
 enum TranscriptProcessor {
     static func process(_ text: String) -> String {
-        var output = text
+        var output = VocabularyStore.shared.applyAliases(to: text)
         if TranscriptProcessingSettings.cleanupEnabled {
             output = applyCleanup(output, rules: TranscriptProcessingSettings.cleanupRules)
         }

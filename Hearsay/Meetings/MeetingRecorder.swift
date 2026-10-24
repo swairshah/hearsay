@@ -661,10 +661,12 @@ final class MeetingRecorder {
         if live?.partials[job.channel]?.ordinal == job.segment.ordinal {
             live?.partials[job.channel] = nil
         }
-        guard let text, var document else {
+        guard let heard = text, var document else {
             emit(.liveUpdated)
             return
         }
+        // Vocabulary aliases are part of recognition, so they land in originalText too.
+        let text = VocabularyStore.shared.applyAliases(to: heard)
         if live?.phase == .recording {
             noteWords(text)
         }

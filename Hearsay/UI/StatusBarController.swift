@@ -104,7 +104,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         meetingItem = NSMenuItem(title: "Record Meeting", action: #selector(toggleMeetingRecording(_:)), keyEquivalent: "")
         meetingItem.target = self
         meetingItem.isEnabled = true
-        meetingItem.image = Self.recordMeetingImage
+        setMeetingItemTitle("Record Meeting", symbol: Self.recordMeetingSymbol)
         menu.addItem(meetingItem)
 
         liveTranscriptItem = NSMenuItem(title: "Show Live Transcript", action: #selector(showLiveMeeting(_:)), keyEquivalent: "")
@@ -337,28 +337,42 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .intersection([.command, .option, .control, .shift])
     }
 
-    /// Red, like a record button; menu item images are template (grey) by default.
-    private static let recordMeetingImage: NSImage? = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Record")?
-        .withSymbolConfiguration(.init(paletteColors: [.systemRed]))
+    /// Red, like a record button. Drawn inside the title: macOS may hide
+    /// menu item images, so `NSMenuItem.image` alone can't be relied on.
+    private static let recordMeetingSymbol = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Record")?
+        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular).applying(.init(paletteColors: [.systemRed])))
 
-    private static let stopMeetingImage: NSImage? = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop")?
-        .withSymbolConfiguration(.init(paletteColors: [.white, .systemRed]))
+    private static let stopMeetingSymbol = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop")?
+        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular).applying(.init(paletteColors: [.white, .systemRed])))
+
+    private func setMeetingItemTitle(_ text: String, symbol: NSImage?) {
+        meetingItem.title = text
+        guard let symbol else {
+            meetingItem.attributedTitle = nil
+            return
+        }
+        let font = NSFont.menuFont(ofSize: 0)
+        let attachment = NSTextAttachment()
+        attachment.image = symbol
+        attachment.bounds = NSRect(x: 0, y: (font.capHeight - symbol.size.height) / 2, width: symbol.size.width, height: symbol.size.height)
+        let title = NSMutableAttributedString(attachment: attachment)
+        title.append(NSAttributedString(string: "  " + text, attributes: [.font: font]))
+        meetingItem.attributedTitle = title
+    }
 
     private func refreshMeetingItem() {
         let recorder = MeetingRecorder.shared
         if let live = recorder.live {
             if live.phase == .recording {
-                meetingItem.title = "Stop Recording Meeting  (\(MeetingTranscriptFormatter.timestamp(live.elapsed)))"
-                meetingItem.image = Self.stopMeetingImage
+                setMeetingItemTitle("Stop Recording Meeting  (\(MeetingTranscriptFormatter.timestamp(live.elapsed)))", symbol: Self.stopMeetingSymbol)
                 meetingItem.isEnabled = true
             } else {
-                meetingItem.title = "Saving Meeting…"
+                setMeetingItemTitle("Saving Meeting…", symbol: nil)
                 meetingItem.isEnabled = false
             }
             liveTranscriptItem.isHidden = false
         } else {
-            meetingItem.title = "Record Meeting"
-            meetingItem.image = Self.recordMeetingImage
+            setMeetingItemTitle("Record Meeting", symbol: Self.recordMeetingSymbol)
             meetingItem.isEnabled = true
             liveTranscriptItem.isHidden = true
         }

@@ -18,15 +18,13 @@ actor ParakeetClient {
         let error: String?
     }
 
-    private var process: Process?
-    private var input: FileHandle?
-    private var output: FileHandle?
+    private let connection = HelperProcessConnection(name: "parakeet")
     private var nextRequestID = 1
     private var currentModel: ParakeetModel?
     private let logger = Logger(subsystem: "com.swair.hearsay", category: "parakeet")
 
     func isModelAvailable(_ model: ParakeetModel) -> Bool {
-        if currentModel == model, process?.isRunning == true {
+        if currentModel == model, connection.isRunning {
             return true
         }
 
@@ -39,7 +37,7 @@ actor ParakeetClient {
     }
 
     func ensureLoaded(_ model: ParakeetModel, progress: @escaping (Progress) -> Void = { _ in }) async throws {
-        if currentModel == model, process?.isRunning == true {
+        if currentModel == model, connection.isRunning {
             return
         }
 
@@ -108,17 +106,12 @@ actor ParakeetClient {
         }
 
         if removedAny, currentModel == model {
-            stopHelper()
+            connection.stop()
             currentModel = nil
         }
     }
 
     private func send(command: String, model: ParakeetModel, audioURL: URL? = nil) async throws -> HelperResponse {
-        try ensureHelperRunning()
-        guard let input, let output else {
-            throw SpeechTranscriptionError.failed("Parakeet helper pipes are unavailable")
-        }
-
         let requestID = nextRequestID
         nextRequestID += 1
 
@@ -129,11 +122,7 @@ actor ParakeetClient {
             audioPath: audioURL?.path
         )
 
-        let requestData = try JSONEncoder().encode(request) + Data([0x0A])
-        let responseData = try await Task.detached {
-            try input.write(contentsOf: requestData)
-            return try Self.readLine(from: output)
-        }.value
+        let responseData = try await connection.roundTrip(try JSONEncoder().encode(request))
 
         let response = try JSONDecoder().decode(HelperResponse.self, from: responseData)
         guard response.id == requestID else {
@@ -145,79 +134,6 @@ actor ParakeetClient {
         }
 
         return response
-    }
-
-    private func ensureHelperRunning() throws {
-        if process?.isRunning == true {
-            return
-        }
-
-        stopHelper()
-
-        guard let helperURL = Self.helperExecutableURL() else {
-            throw SpeechTranscriptionError.failed("Parakeet helper is not bundled for this architecture.")
-        }
-
-        let standardInput = Pipe()
-        let standardOutput = Pipe()
-        let helperProcess = Process()
-        helperProcess.executableURL = helperURL
-        helperProcess.standardInput = standardInput
-        helperProcess.standardOutput = standardOutput
-        helperProcess.standardError = FileHandle.standardError
-
-        do {
-            try helperProcess.run()
-        } catch {
-            throw SpeechTranscriptionError.failed("Unable to launch Parakeet helper: \(error.localizedDescription)")
-        }
-
-        process = helperProcess
-        input = standardInput.fileHandleForWriting
-        output = standardOutput.fileHandleForReading
-        currentModel = nil
-    }
-
-    private func stopHelper() {
-        try? input?.close()
-        if process?.isRunning == true {
-            process?.terminate()
-        }
-        process = nil
-        input = nil
-        output = nil
-    }
-
-    private static func helperExecutableURL() -> URL? {
-        #if arch(arm64)
-        if let url = Bundle.main.url(forAuxiliaryExecutable: "HearsayParakeetHelper") {
-            return url
-        }
-
-        let fallback = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/MacOS/HearsayParakeetHelper")
-        if FileManager.default.isExecutableFile(atPath: fallback.path) {
-            return fallback
-        }
-        #endif
-
-        return nil
-    }
-
-    private static func readLine(from handle: FileHandle) throws -> Data {
-        var data = Data()
-        while true {
-            let byte = handle.readData(ofLength: 1)
-            guard let value = byte.first else {
-                throw SpeechTranscriptionError.failed("Parakeet helper exited unexpectedly")
-            }
-
-            if value == 0x0A {
-                return data
-            }
-
-            data.append(value)
-        }
     }
 
     private static func directorySize(_ directory: URL) -> UInt64? {

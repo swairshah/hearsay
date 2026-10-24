@@ -29,6 +29,33 @@ Transcribed text is pasted at your cursor and copied to the clipboard — both b
 
 Every transcription is saved locally in **History** — find recent ones in the menu bar dropdown, or open the Hearsay window and click any line to copy it again. If a transcription ever fails, the audio is kept and you can retry it from History with one click.
 
+## Recording meetings
+
+Choose **Record Meeting** in the menu bar (or the Meetings pane). The menu bar icon turns red while it records. Hearsay captures two tracks and transcribes them as the meeting goes:
+
+- **Your microphone**, labelled *You*
+- **The call audio** (whatever your Mac plays: Zoom, Meet, Teams…), split into *Speaker 1*, *Speaker 2*, … by an on-device diarization model. Rename speakers in the **Speakers** view.
+
+Everything stays on your Mac. Call audio needs macOS 14.2+ and the *System Audio Recording* permission, and speaker detection needs Apple Silicon.
+
+- **Live transcript** with words appearing while people talk (Parakeet and Whisper models)
+- **Calendar** of recorded days; pick a day to list its meetings, or search across all meetings
+- **Three views**: Transcript (timeline, editable), Reader (selectable document), Speakers (talk time, rename, merge)
+- **Clean-up passes**: filler-word rules or a local LLM polish, with undo and "restore original"
+- **Copy** the transcript, or **share / export Markdown**
+- **Reminders**: asks whether the meeting is over after a few silent minutes, stops by itself after a longer silence, and offers to record when a call app starts using the mic
+
+If you use speakers instead of headphones, your mic hears the call too. Hearsay removes those duplicate lines.
+
+From the terminal (works for agents too):
+
+```bash
+hearsay meeting start | stop | status
+hearsay meetings                      # recent meetings
+hearsay meetings show latest          # Markdown transcript
+hearsay meetings search "pricing"     # across every meeting
+```
+
 ## First launch
 
 1. Grant **Microphone** permission when prompted
@@ -49,6 +76,7 @@ Everything lives in one window with a sidebar:
 - **Microphone** — pick your input device
 - **Replacements** — automatic text substitutions applied to transcripts
 - **Cleanup** & **Post Processing** — rules and LLM-powered polishing for transcribed text
+- **Meetings** — calendar of recorded meetings, live and saved transcripts, search, clean-up, export
 - **History** — every transcription, click a line to copy it, retry failed ones
 - **Permissions** — check and fix Microphone/Accessibility access
 

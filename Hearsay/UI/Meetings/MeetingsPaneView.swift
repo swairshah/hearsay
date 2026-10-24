@@ -528,6 +528,10 @@ private final class MeetingSettingsView: NSView {
                                           tip: "When you use speakers instead of headphones, your mic hears the call. Hearsay drops those duplicate lines.") {
             MeetingSettings.suppressEcho = $0
         })
+        stack.addArrangedSubview(checkbox("Clean up filler words when a meeting ends", MeetingSettings.cleanUpAfterRecording,
+                                          tip: "Runs the Cleanup rules (fillers, replacements) once speakers are sorted out. Undo it from the clean-up menu.") {
+            MeetingSettings.cleanUpAfterRecording = $0
+        })
         stack.addArrangedSubview(checkbox("Keep audio recordings", MeetingSettings.keepAudio,
                                           tip: "Saves compressed audio next to each transcript, needed to re-detect speakers later.") {
             MeetingSettings.keepAudio = $0

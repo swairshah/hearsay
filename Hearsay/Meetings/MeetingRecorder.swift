@@ -463,11 +463,25 @@ final class MeetingRecorder {
             self.live = nil
             self.emit(.finished(meetingID))
 
+            // Speakers first: the speaker pass only splits lines whose text
+            // is still as heard, so clean-up runs once it's done.
             if refine, MeetingStore.shared.document(id: meetingID) != nil {
                 let temporaryTrack = audio?.system == nil ? directory.appendingPathComponent("system.caf") : nil
                 MeetingSpeakerTools.refineSpeakers(meetingID: meetingID, audioURL: temporaryTrack) { _ in
                     if let temporaryTrack { try? FileManager.default.removeItem(at: temporaryTrack) }
+                    Self.cleanUpAfterRecording(meetingID)
                 }
+            } else {
+                Self.cleanUpAfterRecording(meetingID)
+            }
+        }
+    }
+
+    private static func cleanUpAfterRecording(_ meetingID: UUID) {
+        guard MeetingSettings.cleanUpAfterRecording, MeetingStore.shared.document(id: meetingID) != nil else { return }
+        MeetingPostProcessor.shared.run(.cleanup, on: meetingID, progress: { _, _ in }) { result in
+            if case .failure(let error) = result {
+                recorderLogger.error("Clean-up after recording failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

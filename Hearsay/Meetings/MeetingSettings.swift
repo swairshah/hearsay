@@ -10,6 +10,7 @@ enum MeetingSettings {
     private static let suppressEchoKey = "meetingSuppressEcho"
     private static let livePreviewKey = "meetingLivePreview"
     private static let askAfterGoodbyesKey = "meetingAskAfterGoodbyes"
+    private static let cleanUpAfterRecordingKey = "meetingCleanUpAfterRecording"
 
     static let silenceReminderChoices = [0, 2, 3, 5, 10]
     static let autoStopChoices = [0, 10, 15, 30, 60]
@@ -54,6 +55,12 @@ enum MeetingSettings {
     static var suppressEcho: Bool {
         get { bool(suppressEchoKey, default: true) }
         set { UserDefaults.standard.set(newValue, forKey: suppressEchoKey) }
+    }
+
+    /// Run the filler-word clean-up over a meeting once it's saved.
+    static var cleanUpAfterRecording: Bool {
+        get { bool(cleanUpAfterRecordingKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: cleanUpAfterRecordingKey) }
     }
 
     /// Show words while someone is still talking (extra transcription work).

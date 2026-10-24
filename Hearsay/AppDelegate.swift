@@ -485,6 +485,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onSecondary: { MeetingRecorder.shared.snoozeSilenceReminder() },
                 onDismiss: { MeetingRecorder.shared.snoozeSilenceReminder() }
             ))
+        case .wrapUpSuggested:
+            let title = MeetingRecorder.shared.currentMeetingID
+                .flatMap { MeetingStore.shared.document(id: $0)?.title } ?? "the meeting"
+            MeetingPromptPanel.shared.show(.init(
+                symbol: "hand.wave",
+                tone: .recording,
+                title: "Sounds like the meeting wrapped up",
+                message: "Stop recording “\(title)” and save the transcript?",
+                primaryTitle: "Stop Recording",
+                secondaryTitle: "Keep Going",
+                timeout: nil,
+                onPrimary: { MeetingRecorder.shared.stop() },
+                onSecondary: nil,
+                onDismiss: nil
+            ))
         case .autoStopped(_, let minutes):
             logger.info("Meeting auto-stopped after \(minutes) silent minutes")
         case .failed(let message):

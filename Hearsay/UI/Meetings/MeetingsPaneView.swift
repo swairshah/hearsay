@@ -501,10 +501,15 @@ private final class MeetingSettingsView: NSView {
             offTitle: "Never"
         ) { MeetingSettings.autoStopSilenceMinutes = $0 })
 
-        let silenceNote = NSTextField(labelWithString: "…of silence on both your mic and the call.")
+        let silenceNote = NSTextField(labelWithString: "…with no words spoken on your mic or the call.")
         silenceNote.font = .systemFont(ofSize: 11)
         silenceNote.textColor = .tertiaryLabelColor
         stack.addArrangedSubview(silenceNote)
+
+        stack.addArrangedSubview(checkbox("Ask to stop when people say goodbye", MeetingSettings.askAfterGoodbyes,
+                                          tip: "After \"thanks everyone\", \"bye\" or \"talk soon\" and 30 seconds of quiet. Hearsay asks; it never stops by itself.") {
+            MeetingSettings.askAfterGoodbyes = $0
+        })
 
         stack.addArrangedSubview(checkbox("Offer to record when a call starts", MeetingSettings.suggestRecordingOnCalls,
                                           tip: "Zoom, Teams, Webex, FaceTime, Slack, and Google Meet in your browser.") {

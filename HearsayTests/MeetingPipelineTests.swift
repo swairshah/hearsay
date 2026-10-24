@@ -189,3 +189,37 @@ extension MeetingEchoTrimTests {
         XCTAssertEqual(MeetingEchoDetector.resolve(mic: mic, system: system), .trimmed("How long will they take?"))
     }
 }
+
+final class MeetingWrapUpDetectorTests: XCTestCase {
+
+    func testGoodbyesAtTheEndOfAnUtterance() {
+        for text in [
+            "Okay, thanks everyone.",
+            "Alright, I think that's it. Bye!",
+            "Great, talk to you later.",
+            "Thank you all, have a great weekend.",
+            "Cool, see you tomorrow.",
+            "Thanks, y’all.",
+            "Bye-bye.",
+        ] {
+            XCTAssertTrue(MeetingWrapUpDetector.isClosing(text), text)
+        }
+    }
+
+    func testOrdinarySpeechIsNotAGoodbye() {
+        for text in [
+            "Thanks everyone for joining, let's get started with the agenda for today.",
+            "Thank you, that's really helpful.",
+            "We should say goodbye to the old billing service next quarter, honestly it is time.",
+            "Can you see the chart I'm sharing?",
+            "",
+        ] {
+            XCTAssertFalse(MeetingWrapUpDetector.isClosing(text), text)
+        }
+    }
+
+    func testWordCount() {
+        XCTAssertEqual(MeetingWrapUpDetector.wordCount("Yeah, sounds good."), 3)
+        XCTAssertEqual(MeetingWrapUpDetector.wordCount("  ...  "), 0)
+    }
+}

@@ -50,6 +50,8 @@ enum MeetingRecorderEvent {
     case finished(UUID)
     /// Nobody has spoken for `minutes`; ask whether the meeting is over.
     case silenceReminder(minutes: Int)
+    /// Someone said goodbye and the conversation went quiet; ask to stop.
+    case wrapUpSuggested
     case autoStopped(UUID, minutes: Int)
     case failed(String)
 }
@@ -107,6 +109,9 @@ final class MeetingRecorder {
     private var partialTimer: Timer?
     private var relabelTimer: Timer?
     private var silenceReminderSent = false
+    /// When the latest goodbye was heard (cleared when the conversation goes on).
+    private var goodbyeHeardAt: Date?
+    private var wrapUpPrompted = false
     private var nextPartialChannel: MeetingSegment.Channel = .microphone
     private var lastPartialLength: [MeetingSegment.Channel: (ordinal: Int, samples: Int)] = [:]
 
@@ -252,6 +257,8 @@ final class MeetingRecorder {
         self.transcriber = transcriber
         self.stopDate = nil
         self.silenceReminderSent = false
+        self.goodbyeHeardAt = nil
+        self.wrapUpPrompted = false
         self.lastPartialLength = [:]
         self.pendingJobs = []
 
@@ -584,9 +591,6 @@ final class MeetingRecorder {
                 self.enqueue(Job(channel: channel, segment: segment))
             }
             guard self.live?.phase == .recording else { return }
-            if speaking || !closed.isEmpty {
-                self.noteSpeech()
-            }
             self.live?.micLevel = micLevel
             self.live?.systemLevel = systemLevel
             self.live?.micSpeaking = micSpeaking
@@ -660,6 +664,9 @@ final class MeetingRecorder {
         guard let text, var document else {
             emit(.liveUpdated)
             return
+        }
+        if live?.phase == .recording {
+            noteWords(text)
         }
 
         let speakerID = job.channel == .microphone ? MeetingSpeaker.meID : MeetingSpeaker.themID
@@ -784,6 +791,7 @@ final class MeetingRecorder {
             await MainActor.run {
                 self.isTranscribing = false
                 if let text, self.live?.phase == .recording {
+                    self.noteSpeech()
                     self.live?.partials[channel] = MeetingLiveState.Partial(
                         ordinal: snapshot.ordinal,
                         start: snapshot.startTime,
@@ -823,14 +831,35 @@ final class MeetingRecorder {
         relabelTimer = nil
     }
 
+    /// Silence is measured in words, not sound: music, a video or room noise
+    /// after the call shouldn't keep the "still in the meeting?" timer at bay.
     private func noteSpeech() {
         live?.lastSpeechAt = Date()
         silenceReminderSent = false
     }
 
+    /// A finished utterance: words were spoken, and maybe a goodbye.
+    private func noteWords(_ text: String) {
+        noteSpeech()
+        if MeetingWrapUpDetector.isClosing(text) {
+            goodbyeHeardAt = Date()
+            wrapUpPrompted = false
+        } else if MeetingWrapUpDetector.wordCount(text) >= MeetingWrapUpDetector.continuationWords {
+            goodbyeHeardAt = nil
+        }
+    }
+
     private func checkSilence() {
         guard let live, live.phase == .recording else { return }
-        let silentMinutes = Date().timeIntervalSince(live.lastSpeechAt) / 60
+        let quiet = Date().timeIntervalSince(live.lastSpeechAt)
+        let silentMinutes = quiet / 60
+
+        if MeetingSettings.askAfterGoodbyes, goodbyeHeardAt != nil, !wrapUpPrompted,
+           quiet >= MeetingWrapUpDetector.quietSeconds {
+            wrapUpPrompted = true
+            recorderLogger.notice("Goodbye followed by \(Int(quiet))s of quiet; suggesting stop")
+            emit(.wrapUpSuggested)
+        }
 
         let autoStop = MeetingSettings.autoStopSilenceMinutes
         if autoStop > 0, silentMinutes >= Double(autoStop) {

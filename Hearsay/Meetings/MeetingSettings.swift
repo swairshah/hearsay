@@ -9,6 +9,7 @@ enum MeetingSettings {
     private static let speakerDetectionKey = "meetingSpeakerDetection"
     private static let suppressEchoKey = "meetingSuppressEcho"
     private static let livePreviewKey = "meetingLivePreview"
+    private static let askAfterGoodbyesKey = "meetingAskAfterGoodbyes"
 
     static let silenceReminderChoices = [0, 2, 3, 5, 10]
     static let autoStopChoices = [0, 10, 15, 30, 60]
@@ -23,6 +24,12 @@ enum MeetingSettings {
     static var autoStopSilenceMinutes: Int {
         get { integer(autoStopKey, default: 15) }
         set { UserDefaults.standard.set(newValue, forKey: autoStopKey) }
+    }
+
+    /// Ask whether to stop when someone says goodbye and the call goes quiet.
+    static var askAfterGoodbyes: Bool {
+        get { bool(askAfterGoodbyesKey, default: true) }
+        set { UserDefaults.standard.set(newValue, forKey: askAfterGoodbyesKey) }
     }
 
     /// Offer to record when Zoom, Teams, Meet, … start using the microphone.

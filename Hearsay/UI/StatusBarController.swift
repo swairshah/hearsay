@@ -104,7 +104,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         meetingItem = NSMenuItem(title: "Record Meeting", action: #selector(toggleMeetingRecording(_:)), keyEquivalent: "m")
         meetingItem.target = self
         meetingItem.isEnabled = true
-        meetingItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+        meetingItem.image = Self.recordMeetingImage
         menu.addItem(meetingItem)
 
         liveTranscriptItem = NSMenuItem(title: "Show Live Transcript", action: #selector(showLiveMeeting(_:)), keyEquivalent: "")
@@ -324,12 +324,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         meetingMenuTimer = nil
     }
 
+    /// Red, like a record button; menu item images are template (grey) by default.
+    private static let recordMeetingImage: NSImage? = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Record")?
+        .withSymbolConfiguration(.init(paletteColors: [.systemRed]))
+
+    private static let stopMeetingImage: NSImage? = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop")?
+        .withSymbolConfiguration(.init(paletteColors: [.white, .systemRed]))
+
     private func refreshMeetingItem() {
         let recorder = MeetingRecorder.shared
         if let live = recorder.live {
             if live.phase == .recording {
                 meetingItem.title = "Stop Recording Meeting  (\(MeetingTranscriptFormatter.timestamp(live.elapsed)))"
-                meetingItem.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: nil)
+                meetingItem.image = Self.stopMeetingImage
                 meetingItem.isEnabled = true
             } else {
                 meetingItem.title = "Saving Meeting…"
@@ -338,7 +345,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             liveTranscriptItem.isHidden = false
         } else {
             meetingItem.title = "Record Meeting"
-            meetingItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+            meetingItem.image = Self.recordMeetingImage
             meetingItem.isEnabled = true
             liveTranscriptItem.isHidden = true
         }

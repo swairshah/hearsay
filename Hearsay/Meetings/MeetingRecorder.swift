@@ -429,7 +429,11 @@ final class MeetingRecorder {
             await diarizer.shutdown()
         }
 
-        let audio = await finalizeAudio(meetingID: meetingID)
+        // Whole-recording speaker pass, run once the meeting is saved. Needs the
+        // call track: the uncompressed one if audio isn't being kept.
+        let directory = MeetingPaths.directory(for: meetingID)
+        let refine = diarizer != nil && FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path)
+        let audio = await finalizeAudio(meetingID: meetingID, keepingSystemTrack: refine)
 
         await MainActor.run {
             // Deleted while finishing: don't resurrect it.
@@ -458,17 +462,27 @@ final class MeetingRecorder {
             self.diarizerFeedTask = nil
             self.live = nil
             self.emit(.finished(meetingID))
+
+            if refine, MeetingStore.shared.document(id: meetingID) != nil {
+                let temporaryTrack = audio?.system == nil ? directory.appendingPathComponent("system.caf") : nil
+                MeetingSpeakerTools.refineSpeakers(meetingID: meetingID, audioURL: temporaryTrack) { _ in
+                    if let temporaryTrack { try? FileManager.default.removeItem(at: temporaryTrack) }
+                }
+            }
         }
     }
 
-    /// Compress the CAF tracks to AAC, or delete them if audio isn't kept.
-    private func finalizeAudio(meetingID: UUID) async -> MeetingAudioFiles? {
+    /// Compress the CAF tracks to AAC, or delete them if audio isn't kept
+    /// (except the call track when the speaker pass still needs it).
+    private func finalizeAudio(meetingID: UUID, keepingSystemTrack: Bool) async -> MeetingAudioFiles? {
         let directory = MeetingPaths.directory(for: meetingID)
         let tracks = ["microphone.caf", "system.caf"].map { directory.appendingPathComponent($0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
 
         guard MeetingSettings.keepAudio else {
-            tracks.forEach { try? FileManager.default.removeItem(at: $0) }
+            for track in tracks where !(keepingSystemTrack && track.lastPathComponent == "system.caf") {
+                try? FileManager.default.removeItem(at: track)
+            }
             return nil
         }
 

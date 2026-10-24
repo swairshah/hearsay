@@ -9,7 +9,15 @@ private struct HelperRequest: Codable {
     let model: String?
     let audioPath: String?
     /// `diarize_assign`: `[start, end]` pairs in seconds from the session start.
+    /// `refine`: the utterances to return word timings for.
     var ranges: [[Double]]? = nil
+}
+
+/// One recognized word, in seconds from the start of the file.
+private struct HelperWord: Codable {
+    let text: String
+    let start: Double
+    let end: Double
 }
 
 private struct HelperResponse: Codable {
@@ -19,6 +27,11 @@ private struct HelperResponse: Codable {
     let error: String?
     /// `diarize_assign`: dominant speaker slot per range, or -1 for "no speech found".
     var speakers: [Int]? = nil
+    /// `refine`: whole-file speaker turns as `[start, end, speaker]`, speakers
+    /// numbered by first appearance.
+    var turns: [[Double]]? = nil
+    /// `refine`: words per requested range (only when a model was given).
+    var words: [[HelperWord]]? = nil
 }
 
 private enum HelperError: Error, LocalizedError {
@@ -103,11 +116,6 @@ private actor ParakeetRunner {
             try diarization.push(audioURL: URL(fileURLWithPath: audioPath))
             return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
 
-        case "diarize_file":
-            guard let audioPath = request.audioPath else { throw HelperError.missingAudioPath }
-            try await diarization.processFile(URL(fileURLWithPath: audioPath))
-            return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
-
         case "diarize_finish":
             try diarization.finish()
             return HelperResponse(id: request.id, ok: true, text: nil, error: nil)
@@ -117,12 +125,75 @@ private actor ParakeetRunner {
             let speakers = try diarization.assign(ranges: ranges)
             return HelperResponse(id: request.id, ok: true, text: nil, error: nil, speakers: speakers)
 
+        case "refine":
+            // Whole-recording speaker turns, plus word timings for each
+            // utterance so the app can split lines where the speaker changes.
+            guard let audioPath = request.audioPath else { throw HelperError.missingAudioPath }
+            let samples = try AudioConverter().resampleAudioFile(URL(fileURLWithPath: audioPath))
+            let turns = try await offlineDiarization.turns(in: samples)
+            var words: [[HelperWord]]?
+            if let model, let ranges = request.ranges {
+                try await ensureLoaded(model)
+                words = try await wordTimings(in: samples, ranges: ranges)
+            }
+            return HelperResponse(id: request.id, ok: true, text: nil, error: nil, turns: turns, words: words)
+
         default:
             throw HelperError.unsupportedCommand(request.command)
         }
     }
 
     private let diarization = DiarizationSession()
+    private let offlineDiarization = OfflineDiarization()
+
+    /// Transcribe each range on its own, the way the live pipeline did, and
+    /// return its words with times relative to the whole file.
+    private func wordTimings(in samples: [Float], ranges: [[Double]]) async throws -> [[HelperWord]] {
+        guard let asr else { throw HelperError.notInitialized }
+        let rate = 16_000.0
+        var output: [[HelperWord]] = []
+        for range in ranges {
+            guard range.count == 2 else {
+                output.append([])
+                continue
+            }
+            let lower = max(0, min(samples.count, Int(range[0] * rate)))
+            let upper = max(lower, min(samples.count, Int(range[1] * rate)))
+            // Parakeet needs about a tenth of a second of audio.
+            guard upper - lower >= Int(rate / 10) else {
+                output.append([])
+                continue
+            }
+            var decoderState = try TdtDecoderState(decoderLayers: await asr.decoderLayerCount)
+            let result = try await asr.transcribe(Array(samples[lower..<upper]), decoderState: &decoderState)
+            output.append(Self.words(from: result.tokenTimings ?? [], offset: Double(lower) / rate))
+        }
+        return output
+    }
+
+    /// Sub-word tokens start a new word when they begin with a space.
+    private static func words(from tokens: [TokenTiming], offset: Double) -> [HelperWord] {
+        var words: [HelperWord] = []
+        var text = ""
+        var start = 0.0
+        var end = 0.0
+        for token in tokens {
+            if token.token.hasPrefix(" ") || text.isEmpty {
+                if !text.isEmpty {
+                    words.append(HelperWord(text: text, start: start + offset, end: end + offset))
+                }
+                text = token.token.trimmingCharacters(in: .whitespaces)
+                start = token.startTime
+            } else {
+                text += token.token
+            }
+            end = token.endTime
+        }
+        if !text.isEmpty {
+            words.append(HelperWord(text: text, start: start + offset, end: end + offset))
+        }
+        return words
+    }
 
     private func ensureLoaded(_ model: HelperParakeetModel) async throws {
         if currentModel == model, asr != nil {
@@ -224,15 +295,6 @@ private final class DiarizationSession {
         while try diarizer.process() != nil {}
     }
 
-    /// Diarize a whole recording in one pass (used to re-run speaker detection).
-    func processFile(_ url: URL) async throws {
-        let models = try await loadModels()
-        let diarizer = SortformerDiarizer(config: Self.config)
-        diarizer.initialize(models: models)
-        _ = try diarizer.processComplete(audioFileURL: url, finalizeOnCompletion: true)
-        self.diarizer = diarizer
-    }
-
     func finish() throws {
         guard let diarizer else { throw HelperError.diarizerNotStarted }
         _ = try diarizer.finalizeSession()
@@ -302,6 +364,37 @@ private final class DiarizationSession {
         }
         let converter = AudioConverter(sampleRate: 16_000)
         return try converter.resampleAudioFile(url)
+    }
+}
+
+/// Speaker turns over a whole recording at once (pyannote segmentation, speaker
+/// embeddings and VBx clustering via FluidAudio). Sees the full meeting, so it
+/// isn't limited to Sortformer's four speakers or its few-second context.
+private final class OfflineDiarization {
+    private var manager: OfflineDiarizerManager?
+
+    func turns(in samples: [Float]) async throws -> [[Double]] {
+        let manager = try await prepared()
+        let result = try await manager.process(audio: samples)
+        var order: [String: Int] = [:]
+        return result.segments
+            .sorted { $0.startTimeSeconds < $1.startTimeSeconds }
+            .map { segment in
+                let index = order[segment.speakerId] ?? order.count
+                order[segment.speakerId] = index
+                return [Double(segment.startTimeSeconds), Double(segment.endTimeSeconds), Double(index)]
+            }
+    }
+
+    private func prepared() async throws -> OfflineDiarizerManager {
+        if let manager { return manager }
+        // pyannote community-1's clustering threshold (FluidAudio's CLI default).
+        // The library default of 0.6 merged distinct people in testing.
+        let manager = OfflineDiarizerManager(config: OfflineDiarizerConfig(clusteringThreshold: 0.7045655))
+        // Downloads the models on first use.
+        try await manager.prepareModels()
+        self.manager = manager
+        return manager
     }
 }
 

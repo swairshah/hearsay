@@ -68,13 +68,23 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         setupProcessingBar()
         setupContent()
         showEmpty("Select a meeting to read its transcript.")
+        refinementObserver = NotificationCenter.default.addObserver(
+            forName: .meetingSpeakerRefinementChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.updateRefinementBar()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
         liveTimer?.invalidate()
+        if let refinementObserver { NotificationCenter.default.removeObserver(refinementObserver) }
     }
+
+    private var refinementObserver: NSObjectProtocol?
+    /// The processing bar is showing the automatic after-recording speaker pass.
+    private var showsRefinement = false
 
     // MARK: - Setup
 
@@ -250,6 +260,7 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         updateMeta()
         updateLiveChrome()
         updateBanner()
+        updateRefinementBar()
         recomputeMatches()
 
         switch mode {
@@ -726,9 +737,22 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         reload()
     }
 
-    private func setProcessing(_ processing: Bool, label: String) {
+    /// Shows the speaker pass that runs by itself after a recording.
+    private func updateRefinementBar() {
+        let refining = meetingID.map(MeetingSpeakerTools.isRefining) ?? false
+        if refining, !isProcessing {
+            showsRefinement = true
+            setProcessing(true, label: "Detecting speakers over the whole recording…", cancellable: false)
+        } else if !refining, showsRefinement {
+            showsRefinement = false
+            setProcessing(false, label: "")
+        }
+    }
+
+    private func setProcessing(_ processing: Bool, label: String, cancellable: Bool = true) {
         isProcessing = processing
         processingBar.isHidden = !processing
+        processingCancel.isHidden = !cancellable
         processingLabel.stringValue = label
         if processing {
             processingSpinner.startAnimation(nil)
@@ -745,7 +769,9 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
         let canRedetect = document?.audio?.system != nil && MeetingDiarizer.isSupported && !isBeingRecorded
         let redetect = item("Re-detect Speakers", symbol: "person.2.wave.2", action: #selector(redetectSpeakers))
         redetect.isEnabled = canRedetect && !isProcessing
-        redetect.toolTip = canRedetect ? "Run speaker detection again over the saved call audio." : "Needs saved call audio."
+        redetect.toolTip = canRedetect
+            ? "Detect speakers over the whole saved call audio and split lines where the speaker changes."
+            : "Needs saved call audio."
         menu.addItem(redetect)
         menu.addItem(.separator())
         let delete = item("Delete Meeting…", symbol: "trash", action: #selector(deleteMeeting))
@@ -757,12 +783,14 @@ final class MeetingDetailView: NSView, NSSearchFieldDelegate, NSTextFieldDelegat
 
     @objc private func redetectSpeakers() {
         guard let meetingID else { return }
-        setProcessing(true, label: "Detecting speakers…")
-        MeetingSpeakerTools.redetectSpeakers(meetingID: meetingID) { [weak self] result in
+        setProcessing(true, label: "Detecting speakers…", cancellable: false)
+        MeetingSpeakerTools.refineSpeakers(meetingID: meetingID) { [weak self] result in
             self?.setProcessing(false, label: "")
             switch result {
-            case .success(let count):
-                self?.showToast("Found \(count) speaker\(count == 1 ? "" : "s") on the call.")
+            case .success(let outcome):
+                let count = outcome.speakers
+                let split = outcome.splitLines > 0 ? " Split \(outcome.splitLines) line\(outcome.splitLines == 1 ? "" : "s") where the speaker changed." : ""
+                self?.showToast("Found \(count) speaker\(count == 1 ? "" : "s") on the call.\(split)")
             case .failure(let error):
                 self?.showToast(error.localizedDescription)
             }

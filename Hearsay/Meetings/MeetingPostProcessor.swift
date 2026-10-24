@@ -36,7 +36,7 @@ final class MeetingPostProcessor {
 
         var errorDescription: String? {
             switch self {
-            case .busy: return "Another clean-up pass is already running"
+            case .busy: return "Wait for the current clean-up pass or speaker detection to finish"
             case .meetingNotFound: return "The meeting could not be found"
             case .modelUnavailable: return "Download a post-processing model in Post Processing first"
             }
@@ -95,7 +95,8 @@ final class MeetingPostProcessor {
         progress: @escaping (Int, Int) -> Void,
         completion: @escaping (Result<Int, Error>) -> Void
     ) {
-        guard runningMeetingID == nil else {
+        // Speaker detection may split lines underneath an LLM pass.
+        guard runningMeetingID == nil, !MeetingSpeakerTools.isRefining(meetingID) else {
             completion(.failure(PostProcessError.busy))
             return
         }

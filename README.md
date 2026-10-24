@@ -36,6 +36,8 @@ Choose **Record Meeting** in the menu bar (or the Meetings pane). The menu bar i
 - **Your microphone**, labelled *You*
 - **The call audio** (whatever your Mac plays: Zoom, Meet, Teams…), split into *Speaker 1*, *Speaker 2*, … by an on-device diarization model. Rename speakers in the **Speakers** view.
 
+When you stop, Hearsay detects speakers again over the whole call recording (a few seconds) and splits lines where one person picks up right after another. **Re-detect Speakers** (or `hearsay meetings refine <id>`) runs the same pass on older meetings.
+
 Everything stays on your Mac. Call audio needs macOS 14.2+ and the *System Audio Recording* permission, and speaker detection needs Apple Silicon.
 
 - **Live transcript** with words appearing while people talk (Parakeet and Whisper models)

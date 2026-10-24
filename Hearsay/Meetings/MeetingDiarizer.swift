@@ -18,10 +18,18 @@ actor MeetingDiarizer {
     }
 
     private struct Response: Decodable {
+        struct Word: Decodable {
+            let text: String
+            let start: Double
+            let end: Double
+        }
+
         let id: Int
         let ok: Bool
         let error: String?
         let speakers: [Int]?
+        let turns: [[Double]]?
+        let words: [[Word]]?
     }
 
     enum State: Equatable {
@@ -139,16 +147,29 @@ actor MeetingDiarizer {
         }
     }
 
-    /// Diarize a saved recording from scratch (re-run speaker detection).
-    func diarizeFile(_ url: URL) async throws {
-        state = .loading
-        do {
-            try await send(command: "diarize_file", audioPath: url.path)
-            markReady()
-        } catch {
-            markFailed(error)
-            throw error
+    /// Whole-recording speaker turns for a saved call track, plus per-word
+    /// timings for each of `ranges` when a Parakeet `wordModel` is installed.
+    func refine(
+        audioURL: URL,
+        ranges: [ClosedRange<TimeInterval>],
+        wordModel: String?
+    ) async throws -> (turns: [MeetingSpeakerRefinement.Turn], words: [[MeetingSpeakerRefinement.Word]]?) {
+        // First use downloads the speaker models.
+        let response = try await send(
+            command: "refine",
+            model: wordModel,
+            audioPath: audioURL.path,
+            ranges: ranges.map { [$0.lowerBound, $0.upperBound] },
+            timeout: 900
+        )
+        let turns = (response.turns ?? []).compactMap { values -> MeetingSpeakerRefinement.Turn? in
+            guard values.count == 3 else { return nil }
+            return MeetingSpeakerRefinement.Turn(speaker: Int(values[2]), start: values[0], end: values[1])
         }
+        let words = response.words?.map { list in
+            list.map { MeetingSpeakerRefinement.Word(text: $0.text, start: $0.start, end: $0.end) }
+        }
+        return (turns, words)
     }
 
     func shutdown() {
@@ -171,10 +192,10 @@ actor MeetingDiarizer {
     }
 
     @discardableResult
-    private func send(command: String, audioPath: String? = nil, ranges: [[Double]]? = nil, timeout: TimeInterval? = nil) async throws -> Response {
+    private func send(command: String, model: String? = nil, audioPath: String? = nil, ranges: [[Double]]? = nil, timeout: TimeInterval? = nil) async throws -> Response {
         let requestID = nextRequestID
         nextRequestID += 1
-        let request = Request(id: requestID, command: command, model: nil, audioPath: audioPath, ranges: ranges)
+        let request = Request(id: requestID, command: command, model: model, audioPath: audioPath, ranges: ranges)
         let data = try await connection.roundTrip(try JSONEncoder().encode(request), timeout: timeout)
         let response = try JSONDecoder().decode(Response.self, from: data)
         guard response.id == requestID else {

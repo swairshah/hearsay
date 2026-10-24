@@ -3,10 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP_NAME="Hearsay"
-BUNDLE_ID="com.swair.hearsay"
+APP_NAME="Hearsay Dev"
+# A separate bundle ID gives the dev build its own TCC rows (Accessibility,
+# Microphone, System Audio) instead of fighting the installed app for one.
+BUNDLE_ID="com.swair.hearsay.dev"
+RELEASE_BUNDLE_ID="com.swair.hearsay"
 BUILD_APP="build/Build/Products/Debug/Hearsay.app"
-DEV_APP=".dev/Hearsay.app"
+DEV_APP=".dev/$APP_NAME.app"
 DEV_BIN="$DEV_APP/Contents/MacOS/Hearsay"
 BINARY_SRC="$HOME/work/misc/qwen-asr/qwen_asr"
 SIGN_IDENTITY="Hearsay Dev"  # Self-signed cert for stable TCC permissions
@@ -28,6 +31,15 @@ if [ ! -d "Hearsay.xcodeproj" ] || [ "project.yml" -nt "Hearsay.xcodeproj" ]; th
     echo -e "${YELLOW}Generating Xcode project...${NC}"
     xcodegen generate
 fi
+
+# Build the Parakeet/diarization helper first (the app bundles it)
+echo -e "${YELLOW}Building Parakeet helper...${NC}"
+xcodebuild -project Hearsay.xcodeproj \
+    -scheme HearsayParakeetHelper \
+    -configuration Debug \
+    -derivedDataPath build \
+    -skipMacroValidation \
+    build
 
 # Build
 echo -e "${YELLOW}Building...${NC}"
@@ -94,6 +106,26 @@ else
     cp "$BUILD_APP/Contents/Info.plist" "$DEV_APP/Contents/Info.plist"
 fi
 
+# Dev identity: own bundle ID and name, so permissions don't collide with
+# /Applications/Hearsay.app. Data in ~/Library/Application Support/Hearsay is shared.
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$DEV_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$DEV_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Delete :CFBundleDisplayName" "$DEV_APP/Contents/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$DEV_APP/Contents/Info.plist"
+
+# Start the dev build with the installed app's settings (model, hotkey, onboarding) once
+if ! defaults read "$BUNDLE_ID" >/dev/null 2>&1 && defaults read "$RELEASE_BUNDLE_ID" >/dev/null 2>&1; then
+    echo -e "${YELLOW}Copying settings from $RELEASE_BUNDLE_ID...${NC}"
+    defaults export "$RELEASE_BUNDLE_ID" - | defaults import "$BUNDLE_ID" -
+fi
+
+# Parakeet transcription + meeting speaker detection run in this helper
+HELPER_SRC="build/Build/Products/Debug/HearsayParakeetHelper"
+if [ -f "$HELPER_SRC" ]; then
+    cp "$HELPER_SRC" "$DEV_APP/Contents/MacOS/HearsayParakeetHelper"
+    chmod 755 "$DEV_APP/Contents/MacOS/HearsayParakeetHelper"
+fi
+
 # Update qwen_asr if it's newer
 if [ -f "$BINARY_SRC" ]; then
     if [ ! -f "$DEV_APP/Contents/MacOS/qwen_asr" ] || [ "$BINARY_SRC" -nt "$DEV_APP/Contents/MacOS/qwen_asr" ]; then
@@ -111,13 +143,13 @@ for nested in "$DEV_APP/Contents/MacOS/"*; do
 done
 codesign --force --sign "$SIGN_IDENTITY" "$DEV_APP"
 
-# Launch the binary directly (preserves TCC permissions)
-echo -e "${GREEN}Launching Hearsay (dev mode)...${NC}"
-"$DEV_BIN" &
-PID=$!
+# Launch through LaunchServices so macOS attributes permissions to the app
+# itself rather than to the terminal that ran this script
+echo -e "${GREEN}Launching $APP_NAME...${NC}"
+open -n "$DEV_APP"
 
 sleep 1
-echo -e "${GREEN}Hearsay is running (PID: $PID)${NC}"
+echo -e "${GREEN}$APP_NAME is running (PID: $(pgrep -nf "$DEV_BIN"))${NC}"
 echo -e "Hold RIGHT OPTION (⌥) to record."
 echo ""
 echo -e "To stop: ${YELLOW}pkill -f Hearsay${NC}"

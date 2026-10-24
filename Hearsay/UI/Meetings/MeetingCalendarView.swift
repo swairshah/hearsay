@@ -22,8 +22,8 @@ enum MeetingSpeakerPalette {
     }
 }
 
-/// A compact month calendar. Days with recorded meetings get a dot; clicking a
-/// day selects it.
+/// A compact month calendar, shaded like a contribution heatmap: the more
+/// meetings on a day, the deeper its square. Clicking a day selects it.
 final class MeetingCalendarView: NSView {
 
     var onSelectDay: ((Date) -> Void)?
@@ -146,25 +146,38 @@ final class MeetingCalendarView: NSView {
             let isToday = day == today
             let count = meetingCounts[day] ?? 0
 
-            let circleSize: CGFloat = 22
-            let circle = NSRect(x: rect.midX - circleSize / 2, y: rect.minY + 1, width: circleSize, height: circleSize)
-            if isSelected {
-                NSColor.controlAccentColor.setFill()
-                NSBezierPath(ovalIn: circle).fill()
+            let squareSize: CGFloat = 24
+            let square = NSRect(x: rect.midX - squareSize / 2, y: rect.minY + 2, width: squareSize, height: squareSize)
+            let shape = NSBezierPath(roundedRect: square, xRadius: 5, yRadius: 5)
+            let level = Self.heatLevel(for: count)
+            if level > 0 {
+                let alpha = Self.heatAlphas[level] * (inMonth ? 1 : 0.4)
+                NSColor.controlAccentColor.withAlphaComponent(alpha).setFill()
+                shape.fill()
             } else if day == hoveredDay {
                 Theme.wash(Theme.Wash.cardHover).setFill()
-                NSBezierPath(ovalIn: circle).fill()
+                shape.fill()
+            }
+            if isSelected {
+                let ring = NSBezierPath(roundedRect: square.insetBy(dx: -1.5, dy: -1.5), xRadius: 6.5, yRadius: 6.5)
+                ring.lineWidth = 2
+                NSColor.controlAccentColor.setStroke()
+                ring.stroke()
+            } else if level > 0 && day == hoveredDay {
+                NSColor.controlAccentColor.withAlphaComponent(0.5).setStroke()
+                shape.lineWidth = 1
+                shape.stroke()
             }
 
             let textColor: NSColor
-            if isSelected {
+            if !inMonth {
+                textColor = .quaternaryLabelColor
+            } else if level >= 3 {
                 textColor = .white
             } else if isToday {
                 textColor = .controlAccentColor
-            } else if inMonth {
-                textColor = count > 0 ? .labelColor : .secondaryLabelColor
             } else {
-                textColor = .quaternaryLabelColor
+                textColor = count > 0 ? .labelColor : .secondaryLabelColor
             }
             let font = NSFont.monospacedDigitSystemFont(
                 ofSize: 11.5,
@@ -173,23 +186,20 @@ final class MeetingCalendarView: NSView {
             let text = "\(calendar.component(.day, from: day))"
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
             let size = text.size(withAttributes: attributes)
-            text.draw(at: NSPoint(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2 - 1), withAttributes: attributes)
+            text.draw(at: NSPoint(x: square.midX - size.width / 2, y: square.midY - size.height / 2), withAttributes: attributes)
+        }
+    }
 
-            if count > 0 {
-                // Up to three dots: one per meeting.
-                let dots = min(count, 3)
-                let dotSize: CGFloat = 3.5
-                let spacing: CGFloat = 2.5
-                let total = CGFloat(dots) * dotSize + CGFloat(dots - 1) * spacing
-                var x = circle.midX - total / 2
-                let y = circle.maxY + 0.5
-                let dotColor: NSColor = inMonth ? .controlAccentColor : .tertiaryLabelColor
-                dotColor.setFill()
-                for _ in 0..<dots {
-                    NSBezierPath(ovalIn: NSRect(x: x, y: y, width: dotSize, height: dotSize)).fill()
-                    x += dotSize + spacing
-                }
-            }
+    /// Shade steps, GitHub-style: none, 1, 2–3, 4–6, 7+ meetings.
+    private static let heatAlphas: [CGFloat] = [0, 0.18, 0.38, 0.62, 0.9]
+
+    static func heatLevel(for count: Int) -> Int {
+        switch count {
+        case ..<1: return 0
+        case 1: return 1
+        case 2...3: return 2
+        case 4...6: return 3
+        default: return 4
         }
     }
 
@@ -243,6 +253,8 @@ final class MeetingCalendarView: NSView {
         let day = day(at: convert(event.locationInWindow, from: nil))
         if day != hoveredDay {
             hoveredDay = day
+            let count = day.flatMap { meetingCounts[$0] } ?? 0
+            toolTip = count == 0 ? nil : (count == 1 ? "1 meeting" : "\(count) meetings")
             needsDisplay = true
         }
     }

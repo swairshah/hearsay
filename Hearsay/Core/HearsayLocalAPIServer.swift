@@ -218,6 +218,31 @@ final class HearsayLocalAPIServer {
             return
         }
 
+        // Whole-recording speaker pass on a saved meeting (same as "Re-detect
+        // Speakers"); answers once it's done.
+        if request.method == "POST", components == ["v1", "meetings", "refine"] {
+            let body = (try? JSONDecoder().decode([String: String].self, from: request.body)) ?? [:]
+            guard let id = body["id"].flatMap(UUID.init(uuidString:)) else {
+                sendError(connection, status: 400, code: "invalid_request", message: "Missing meeting id")
+                return
+            }
+            Task { @MainActor in
+                MeetingSpeakerTools.refineSpeakers(meetingID: id) { result in
+                    switch result {
+                    case .success(let outcome):
+                        self.sendJSON(connection, status: 200, object: [
+                            "speakers": outcome.speakers,
+                            "splitLines": outcome.splitLines,
+                            "relabelledLines": outcome.relabelledLines
+                        ])
+                    case .failure(let error):
+                        self.sendError(connection, status: 409, code: "refine_failed", message: error.localizedDescription)
+                    }
+                }
+            }
+            return
+        }
+
         if request.method == "POST", components == ["v1", "meetings", "open"] {
             let body = (try? JSONDecoder().decode([String: String].self, from: request.body)) ?? [:]
             let id = body["id"].flatMap(UUID.init(uuidString:))

@@ -297,7 +297,7 @@ private struct Command {
 
     private func meetings(_ arguments: [String]) async throws {
         let action = arguments.first ?? "list"
-        let known = ["list", "ls", "show", "cat", "search", "path", "open", "help", "--help", "-h"]
+        let known = ["list", "ls", "show", "cat", "search", "path", "open", "refine", "help", "--help", "-h"]
         // `hearsay meetings --limit 5` means list.
         let rest = known.contains(action) ? Array(arguments.dropFirst()) : arguments
         var parser = ArgumentParser(rest)
@@ -405,6 +405,23 @@ private struct Command {
             try parser.rejectUnused()
             _ = try await APIClient().request(method: "POST", path: "/v1/meetings/open", body: try JSONEncoder().encode(body))
 
+        case "refine":
+            let reference = parser.positionalArgument() ?? "latest"
+            try parser.rejectUnused()
+            let document = try library.document(matching: reference)
+            var client = APIClient()
+            // First use downloads the speaker models.
+            client.timeout = 900
+            let data = try await client.request(
+                method: "POST",
+                path: "/v1/meetings/refine",
+                body: try JSONEncoder().encode(["id": document.id.uuidString])
+            )
+            let outcome = try JSONSerialization.jsonObject(with: data) as? [String: Int] ?? [:]
+            let speakers = outcome["speakers"] ?? 0
+            let split = outcome["splitLines"] ?? 0
+            print("\(document.shortID)  \(speakers) call speaker\(speakers == 1 ? "" : "s"), \(split) line\(split == 1 ? "" : "s") split where the speaker changed, \(outcome["relabelledLines"] ?? 0) relabelled")
+
         case "path":
             guard let reference = parser.positionalArgument() else {
                 print(MeetingPaths.rootDirectory.path)
@@ -460,6 +477,7 @@ private struct Command {
           hearsay meetings search <query> [--limit N] [--json]
           hearsay meetings path [<id|latest>]
           hearsay meetings open [<id|latest>] [--view transcript|reader|speakers]
+          hearsay meetings refine [<id|latest>]
 
         IDs can be shortened to any unique prefix (the 8-character id from 'list').
         'show' prints the processed transcript; --original prints the raw speech-to-text.

@@ -477,7 +477,9 @@ final class MeetingRecorder {
         }
     }
 
+    /// Runs once the speaker pass is done (it needs the call audio).
     private static func cleanUpAfterRecording(_ meetingID: UUID) {
+        MeetingAudioStorage.enforceLimit()
         guard MeetingSettings.cleanUpAfterRecording, MeetingStore.shared.document(id: meetingID) != nil else { return }
         MeetingPostProcessor.shared.run(.cleanup, on: meetingID, progress: { _, _ in }) { result in
             if case .failure(let error) = result {

@@ -411,6 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.offerToStop(after: call)
         }
         updateCallDetector()
+        MeetingAudioStorage.enforceLimit()
         NotificationCenter.default.addObserver(forName: .meetingSettingsChanged, object: nil, queue: .main) { [weak self] _ in
             self?.updateCallDetector()
         }

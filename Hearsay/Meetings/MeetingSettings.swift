@@ -11,9 +11,11 @@ enum MeetingSettings {
     private static let livePreviewKey = "meetingLivePreview"
     private static let askAfterGoodbyesKey = "meetingAskAfterGoodbyes"
     private static let cleanUpAfterRecordingKey = "meetingCleanUpAfterRecording"
+    private static let audioLimitKey = "meetingAudioLimitGB"
 
     static let silenceReminderChoices = [0, 2, 3, 5, 10]
     static let autoStopChoices = [0, 10, 15, 30, 60]
+    static let audioLimitChoices = [0, 1, 2, 5, 10, 25]
 
     /// Ask "still in a meeting?" after this many silent minutes (0 = never).
     static var silenceReminderMinutes: Int {
@@ -61,6 +63,13 @@ enum MeetingSettings {
     static var cleanUpAfterRecording: Bool {
         get { bool(cleanUpAfterRecordingKey, default: true) }
         set { UserDefaults.standard.set(newValue, forKey: cleanUpAfterRecordingKey) }
+    }
+
+    /// Most disk space saved meeting audio may use, in GB (0 = no limit).
+    /// Past it, the oldest meetings lose their audio; transcripts stay.
+    static var audioLimitGB: Int {
+        get { integer(audioLimitKey, default: 0) }
+        set { UserDefaults.standard.set(newValue, forKey: audioLimitKey) }
     }
 
     /// Show words while someone is still talking (extra transcription work).

@@ -537,6 +537,12 @@ private final class MeetingSettingsView: NSView {
             MeetingSettings.keepAudio = $0
         })
 
+        stack.addArrangedSubview(audioLimitRow())
+        audioUsageNote.font = .systemFont(ofSize: 11)
+        audioUsageNote.textColor = .tertiaryLabelColor
+        updateAudioUsage()
+        stack.addArrangedSubview(audioUsageNote)
+
         let folder = NSButton(title: "Open Meetings Folder", target: self, action: #selector(openFolder))
         folder.bezelStyle = .inline
         folder.controlSize = .small
@@ -560,6 +566,56 @@ private final class MeetingSettingsView: NSView {
         row.addArrangedSubview(text)
         row.addArrangedSubview(popup)
         return row
+    }
+
+    private let audioUsageNote = NSTextField(labelWithString: "")
+    private var audioLimitPopup: ClosurePopUpButton?
+
+    private func audioLimitRow() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        let text = NSTextField(labelWithString: "Meeting audio may use up to")
+        text.font = .systemFont(ofSize: 12.5)
+        let choices = MeetingSettings.audioLimitChoices
+        let popup = ClosurePopUpButton(onChange: { [weak self] index in self?.changeAudioLimit(to: choices[index]) })
+        popup.controlSize = .small
+        for choice in choices {
+            popup.addItem(withTitle: choice == 0 ? "No limit" : "\(choice) GB")
+        }
+        popup.selectItem(at: choices.firstIndex(of: MeetingSettings.audioLimitGB) ?? 0)
+        audioLimitPopup = popup
+        row.addArrangedSubview(text)
+        row.addArrangedSubview(popup)
+        return row
+    }
+
+    private func changeAudioLimit(to limitGB: Int) {
+        let total = MeetingAudioStorage.totalBytes()
+        if limitGB > 0, total > Int64(limitGB) * 1_000_000_000 {
+            let alert = NSAlert()
+            alert.messageText = "Delete older meeting audio?"
+            alert.informativeText = "Meeting audio takes \(Self.formatBytes(total)). To fit in \(limitGB) GB, the oldest meetings lose their audio. Their transcripts stay."
+            alert.addButton(withTitle: "Delete Audio")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                audioLimitPopup?.selectItem(at: MeetingSettings.audioLimitChoices.firstIndex(of: MeetingSettings.audioLimitGB) ?? 0)
+                return
+            }
+        }
+        MeetingSettings.audioLimitGB = limitGB
+        MeetingAudioStorage.enforceLimit()
+        updateAudioUsage()
+    }
+
+    private func updateAudioUsage() {
+        audioUsageNote.stringValue = "Using \(Self.formatBytes(MeetingAudioStorage.totalBytes())). Past the limit, the oldest meetings lose their audio; transcripts stay."
+        audioUsageNote.lineBreakMode = .byWordWrapping
+        audioUsageNote.preferredMaxLayoutWidth = 300
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private func checkbox(_ title: String, _ value: Bool, tip: String, onChange: @escaping (Bool) -> Void) -> NSView {

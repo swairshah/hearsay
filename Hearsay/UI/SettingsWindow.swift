@@ -17,6 +17,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case about
         case meetings
         case vocabulary
+        case keyboard
     }
     
     var onHotkeyChanged: (() -> Void)?
@@ -41,6 +42,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var sidebarFooter: SidebarFooterView!
 
     private var settingsTab: SettingsTabView!
+    private var keyboardTab: KeyboardShortcutsTabView!
     private var historyTab: HistoryTabView!
     private var permissionsTab: PermissionsTabView!
     private var modelsTab: ModelsTabView!
@@ -89,6 +91,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             NavEntry(id: "settings", title: "Settings", symbol: "gearshape"),
             NavEntry(id: "models", title: "Models", symbol: "square.stack.3d.up"),
             NavEntry(id: "microphone", title: "Microphone", symbol: "mic"),
+            NavEntry(id: "keyboard", title: "Keyboard Shortcuts", symbol: "keyboard"),
         ]),
         ("Text", [
             NavEntry(id: "shortcuts", title: "Replacements", symbol: "arrow.left.arrow.right"),
@@ -153,7 +156,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let paneFrame = NSRect(x: 0, y: 0, width: 640, height: 560)
 
         settingsTab = SettingsTabView(frame: paneFrame)
-        settingsTab.onHotkeyChanged = { [weak self] in self?.onHotkeyChanged?() }
+        keyboardTab = KeyboardShortcutsTabView(frame: paneFrame)
+        keyboardTab.onHotkeyChanged = { [weak self] in self?.onHotkeyChanged?() }
 
         historyTab = HistoryTabView(frame: paneFrame)
         historyTab.onRetry = { [weak self] item, completion in
@@ -192,6 +196,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         panes = [
             "meetings": meetingsTab,
             "settings": settingsTab,
+            "keyboard": keyboardTab,
             "models": modelsTab,
             "microphone": microphoneTab,
             "shortcuts": shortcutsTab,
@@ -294,8 +299,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         adjustWindowSize(forPane: id)
 
-        // The Settings pane owns the shortcut recorder, so it needs key capture.
-        if id == "settings" {
+        // The Keyboard Shortcuts pane owns the shortcut recorders, so it needs key capture.
+        if id == "keyboard" {
             onWindowOpened?()
         } else {
             onWindowClosed?()
@@ -362,14 +367,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case .about: paneID = "about"
         case .meetings: paneID = "meetings"
         case .vocabulary: paneID = "vocabulary"
+        case .keyboard: paneID = "keyboard"
         }
         selectPane(paneID, animated: false)
         
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         
-        // Only pause hotkeys when opening the Settings pane (shortcut recorder needs key capture).
-        if tab == .settings {
+        // Only pause hotkeys on the Keyboard Shortcuts pane (shortcut recorders need key capture).
+        if tab == .keyboard {
             onWindowOpened?()
         } else {
             onWindowClosed?()
@@ -386,8 +392,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     
     func windowDidBecomeKey(_ notification: Notification) {
-        // Only pause hotkeys when Settings pane is active (shortcut recorder needs key capture)
-        if currentPaneID == "settings" {
+        // Only pause hotkeys on the Keyboard Shortcuts pane (shortcut recorders need key capture)
+        if currentPaneID == "keyboard" {
             onWindowOpened?()
         } else {
             onWindowClosed?()
@@ -435,8 +441,6 @@ private enum AppInfo {
 
 private class SettingsTabView: NSView {
     
-    var onHotkeyChanged: (() -> Void)?
-    
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "Hearsay")
     private let subtitleLabel = NSTextField(labelWithString: "Local Speech-to-Text")
@@ -454,16 +458,6 @@ private class SettingsTabView: NSView {
     private let maxHistoryValueLabel = NSTextField(labelWithString: "")
 
     
-    private let shortcutsBox = NSBox()
-    private let activationLabel = NSTextField(labelWithString: "Activation")
-    private let activationPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let activationSeparator = NSBox()
-    private var holdRow: ShortcutRowView!
-    private var toggleRow: ShortcutRowView!
-    private var screenshotRow: ShortcutRowView!
-    private var fullScreenshotRow: ShortcutRowView!
-    private let resetButton = NSButton(title: "Reset to Defaults", target: nil, action: nil)
-    
     override init(frame: NSRect) {
         super.init(frame: frame)
         setupUI()
@@ -480,7 +474,7 @@ private class SettingsTabView: NSView {
         titleLabel.alignment = .left
         addSubview(titleLabel)
 
-        subtitleLabel.stringValue = "Recording, clipboard behaviour, and keyboard shortcuts."
+        subtitleLabel.stringValue = "Recording and clipboard behaviour. Shortcuts live in Keyboard Shortcuts."
         
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
@@ -532,117 +526,6 @@ private class SettingsTabView: NSView {
         maxHistoryValueLabel.textColor = .secondaryLabelColor
         maxHistoryValueLabel.alignment = .right
         generalBox.contentView?.addSubview(maxHistoryValueLabel)
-        
-
-        
-        // Keyboard shortcuts box
-        shortcutsBox.title = "Keyboard Shortcuts"
-        shortcutsBox.titleFont = .systemFont(ofSize: 12, weight: .semibold)
-        addSubview(shortcutsBox)
-        
-        // Activation mode picker
-        activationLabel.font = .systemFont(ofSize: 13)
-        activationLabel.textColor = .labelColor
-        shortcutsBox.contentView?.addSubview(activationLabel)
-        
-        activationPicker.addItems(withTitles: ["Hold", "Double-Tap"])
-        activationPicker.controlSize = .regular
-        activationPicker.font = .systemFont(ofSize: 12)
-        activationPicker.target = self
-        activationPicker.action = #selector(activationChanged(_:))
-        shortcutsBox.contentView?.addSubview(activationPicker)
-        
-        activationSeparator.boxType = .separator
-        shortcutsBox.contentView?.addSubview(activationSeparator)
-        
-        holdRow = ShortcutRowView(
-            label: "Hold to Record",
-            captureMode: .singleModifier,
-            placeholder: "Click to set",
-            canClear: false,
-            showSeparator: true
-        ) { [weak self] s in
-            UserDefaults.standard.set(s.keyCode, forKey: "holdKeyCode")
-            self?.onHotkeyChanged?()
-        }
-        shortcutsBox.contentView?.addSubview(holdRow)
-        
-        toggleRow = ShortcutRowView(
-            label: "Toggle Record",
-            captureMode: .keyCombo,
-            placeholder: "Not set",
-            canClear: true,
-            showSeparator: true
-        ) { [weak self] s in
-            UserDefaults.standard.set(s.keyCode, forKey: "toggleStartKeyCode")
-            UserDefaults.standard.set(Int(s.modifiers), forKey: "toggleStartModifiers")
-            self?.onHotkeyChanged?()
-        }
-        shortcutsBox.contentView?.addSubview(toggleRow)
-        
-        screenshotRow = ShortcutRowView(
-            label: "Take Screenshot",
-            captureMode: .keyCombo,
-            placeholder: "Not set",
-            canClear: true,
-            showSeparator: true
-        ) { [weak self] s in
-            UserDefaults.standard.set(s.keyCode, forKey: "screenshotKeyCode")
-            UserDefaults.standard.set(Int(s.modifiers), forKey: "screenshotModifiers")
-            self?.onHotkeyChanged?()
-        }
-        shortcutsBox.contentView?.addSubview(screenshotRow)
-
-        fullScreenshotRow = ShortcutRowView(
-            label: "Full-Screen Screenshot",
-            captureMode: .keyCombo,
-            placeholder: "Not set",
-            canClear: true,
-            showSeparator: false
-        ) { [weak self] s in
-            UserDefaults.standard.set(s.keyCode, forKey: "fullScreenshotKeyCode")
-            UserDefaults.standard.set(Int(s.modifiers), forKey: "fullScreenshotModifiers")
-            self?.onHotkeyChanged?()
-        }
-        shortcutsBox.contentView?.addSubview(fullScreenshotRow)
-
-        // Conflict detection across the three combo shortcuts
-        toggleRow.recorder.onConflict = { [weak self] candidate in
-            guard let self = self else { return nil }
-            if candidate.conflicts(with: self.screenshotRow.recorder.currentShortcut) {
-                return "This shortcut is already used by \"Take Screenshot\"."
-            }
-            if candidate.conflicts(with: self.fullScreenshotRow.recorder.currentShortcut) {
-                return "This shortcut is already used by \"Full-Screen Screenshot\"."
-            }
-            return nil
-        }
-        screenshotRow.recorder.onConflict = { [weak self] candidate in
-            guard let self = self else { return nil }
-            if candidate.conflicts(with: self.toggleRow.recorder.currentShortcut) {
-                return "This shortcut is already used by \"Toggle Record\"."
-            }
-            if candidate.conflicts(with: self.fullScreenshotRow.recorder.currentShortcut) {
-                return "This shortcut is already used by \"Full-Screen Screenshot\"."
-            }
-            return nil
-        }
-        fullScreenshotRow.recorder.onConflict = { [weak self] candidate in
-            guard let self = self else { return nil }
-            if candidate.conflicts(with: self.toggleRow.recorder.currentShortcut) {
-                return "This shortcut is already used by \"Toggle Record\"."
-            }
-            if candidate.conflicts(with: self.screenshotRow.recorder.currentShortcut) {
-                return "This shortcut is already used by \"Take Screenshot\"."
-            }
-            return nil
-        }
-        
-        resetButton.bezelStyle = .rounded
-        resetButton.controlSize = .small
-        resetButton.target = self
-        resetButton.action = #selector(resetToDefaults(_:))
-        shortcutsBox.contentView?.addSubview(resetButton)
     }
     
     private func loadSettings() {
@@ -662,37 +545,6 @@ private class SettingsTabView: NSView {
         let maxItems = HistoryStore.shared.maxItems
         maxHistorySlider.doubleValue = Self.itemsToSlider(maxItems)
         updateMaxHistoryLabel(maxItems)
-        
-
-        
-        let modeRaw = UserDefaults.standard.integer(forKey: "activationMode")
-        activationPicker.selectItem(at: modeRaw)
-        updateHoldRowLabel()
-        
-        holdRow.recorder.setShortcut(Shortcut(
-            keyCode: UserDefaults.standard.object(forKey: "holdKeyCode") as? Int ?? 61,
-            modifiers: 0
-        ))
-        
-        toggleRow.recorder.setShortcut(Shortcut(
-            keyCode: UserDefaults.standard.object(forKey: "toggleStartKeyCode") as? Int ?? 49,
-            modifiers: UInt(UserDefaults.standard.object(forKey: "toggleStartModifiers") as? Int ?? Int(NSEvent.ModifierFlags.option.rawValue))
-        ))
-        
-        screenshotRow.recorder.setShortcut(Shortcut(
-            keyCode: UserDefaults.standard.object(forKey: "screenshotKeyCode") as? Int ?? 21,
-            modifiers: UInt(UserDefaults.standard.object(forKey: "screenshotModifiers") as? Int ?? Int(NSEvent.ModifierFlags.option.rawValue))
-        ))
-
-        fullScreenshotRow.recorder.setShortcut(Shortcut(
-            keyCode: UserDefaults.standard.object(forKey: "fullScreenshotKeyCode") as? Int ?? 20,
-            modifiers: UInt(UserDefaults.standard.object(forKey: "fullScreenshotModifiers") as? Int ?? Int(NSEvent.ModifierFlags.option.rawValue))
-        ))
-    }
-    
-    private func updateHoldRowLabel() {
-        let isDoubleTap = activationPicker.indexOfSelectedItem == 1
-        holdRow.setLabel(isDoubleTap ? "Record Key" : "Hold to Record")
     }
     
     override func layout() {
@@ -729,43 +581,6 @@ private class SettingsTabView: NSView {
             maxHistoryValueLabel.frame = NSRect(x: sliderRight - valueLabelW, y: historyRowY, width: valueLabelW, height: 18)
             maxHistorySlider.frame = NSRect(x: inset, y: historyRowY - 22, width: sliderRight - inset, height: 21)
         }
-        y -= generalH + 12
-        
-        // Shortcuts box
-        let rowH: CGFloat = 40
-        let resetH: CGFloat = 32
-        let shortcutsH: CGFloat = rowH * 5 + resetH + 20  // activation + 4 rows + reset + padding
-        shortcutsBox.frame = NSRect(x: pad, y: y - shortcutsH, width: boxW, height: shortcutsH)
-        layoutShortcutsBox()
-    }
-    
-    private func layoutShortcutsBox() {
-        guard let cv = shortcutsBox.contentView else { return }
-        let rowH: CGFloat = 40
-        let inset: CGFloat = 12
-        let rowW = cv.bounds.width - inset * 2
-        var y = cv.bounds.height - 4
-        
-        // Activation mode row
-        y -= rowH
-        let pickerW: CGFloat = 130
-        activationLabel.frame = NSRect(x: inset, y: y, width: rowW - pickerW - 8, height: rowH)
-        activationPicker.frame = NSRect(x: cv.bounds.width - inset - pickerW, y: y + (rowH - 26) / 2, width: pickerW, height: 26)
-        activationSeparator.frame = NSRect(x: inset, y: y, width: rowW, height: 1)
-        
-        // Shortcut rows
-        y -= rowH
-        holdRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
-        y -= rowH
-        toggleRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
-        y -= rowH
-        screenshotRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
-        y -= rowH
-        fullScreenshotRow.frame = NSRect(x: inset, y: y, width: rowW, height: rowH)
-
-        // Reset button below everything
-        resetButton.sizeToFit()
-        resetButton.frame.origin = NSPoint(x: cv.bounds.width - inset - resetButton.frame.width, y: y - 28)
     }
     
     @objc private func copyToClipboardChanged(_ sender: NSButton) {
@@ -828,24 +643,262 @@ private class SettingsTabView: NSView {
         NSApp.setActivationPolicy(show ? .regular : .accessory)
     }
     
+}
+
+// MARK: - Keyboard Shortcuts Tab
+
+/// Every keyboard shortcut in one place: the global ones (editable) and the
+/// fixed ones inside Hearsay's menu and windows (for reference).
+private class KeyboardShortcutsTabView: NSView {
+
+    var onHotkeyChanged: (() -> Void)?
+
+    private let scrollView = NSScrollView()
+    private let content = FlippedView()
+    private let titleLabel = NSTextField(labelWithString: "Keyboard Shortcuts")
+    private let subtitleLabel = NSTextField(labelWithString: "Global shortcuts work from any app. Click one to change it.")
+
+    private let dictationBox = NSBox()
+    private let activationLabel = NSTextField(labelWithString: "Activation")
+    private let activationPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let activationSeparator = NSBox()
+    private var holdRow: ShortcutRowView!
+    private var toggleRow: ShortcutRowView!
+
+    private let screenshotBox = NSBox()
+    private var screenshotRow: ShortcutRowView!
+    private var fullScreenshotRow: ShortcutRowView!
+
+    private let meetingBox = NSBox()
+    private var meetingRow: ShortcutRowView!
+
+    private let resetButton = NSButton(title: "Reset to Defaults", target: nil, action: nil)
+
+    private let referenceBox = NSBox()
+    private var referenceRows: [(label: NSTextField, keys: NSTextField)] = []
+
+    /// Fixed shortcuts, shown for reference.
+    private static let reference: [(String, String)] = [
+        ("Open Window (menu open)", "⌘O"),
+        ("Copy a recent transcription (menu open)", "⌘1 – ⌘4"),
+        ("View All History (menu open)", "⌘H"),
+        ("Settings (menu open)", "⌘,"),
+        ("Search this meeting", "⌘F"),
+        ("Search all meetings", "⇧⌘F"),
+        ("Choose the highlighted button in a prompt", "Return"),
+    ]
+
+    private static let rowHeight: CGFloat = 40
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupUI()
+        loadSettings()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupUI() {
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = content
+        addSubview(scrollView)
+
+        titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
+        content.addSubview(titleLabel)
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        content.addSubview(subtitleLabel)
+
+        for (box, title) in [(dictationBox, "Dictation"), (screenshotBox, "Screenshots While Dictating"),
+                             (meetingBox, "Meetings"), (referenceBox, "Inside Hearsay")] {
+            box.title = title
+            box.titleFont = .systemFont(ofSize: 12, weight: .semibold)
+            content.addSubview(box)
+        }
+
+        activationLabel.font = .systemFont(ofSize: 13)
+        dictationBox.contentView?.addSubview(activationLabel)
+        activationPicker.addItems(withTitles: ["Hold", "Double-Tap"])
+        activationPicker.font = .systemFont(ofSize: 12)
+        activationPicker.target = self
+        activationPicker.action = #selector(activationChanged(_:))
+        dictationBox.contentView?.addSubview(activationPicker)
+        activationSeparator.boxType = .separator
+        dictationBox.contentView?.addSubview(activationSeparator)
+
+        holdRow = ShortcutRowView(label: "Hold to Record", captureMode: .singleModifier, placeholder: "Click to set",
+                                  canClear: false, showSeparator: true) { [weak self] s in
+            UserDefaults.standard.set(s.keyCode, forKey: "holdKeyCode")
+            self?.onHotkeyChanged?()
+        }
+        toggleRow = comboRow("Toggle Record", keyCodeKey: "toggleStartKeyCode", modifiersKey: "toggleStartModifiers", separator: false)
+        dictationBox.contentView?.addSubview(holdRow)
+        dictationBox.contentView?.addSubview(toggleRow)
+
+        screenshotRow = comboRow("Take Screenshot", keyCodeKey: "screenshotKeyCode", modifiersKey: "screenshotModifiers", separator: true)
+        fullScreenshotRow = comboRow("Full-Screen Screenshot", keyCodeKey: "fullScreenshotKeyCode", modifiersKey: "fullScreenshotModifiers", separator: false)
+        screenshotBox.contentView?.addSubview(screenshotRow)
+        screenshotBox.contentView?.addSubview(fullScreenshotRow)
+
+        meetingRow = comboRow("Record / Stop Meeting", keyCodeKey: HotkeyMonitor.meetingKeyCodeKey,
+                              modifiersKey: HotkeyMonitor.meetingModifiersKey, separator: false)
+        meetingBox.contentView?.addSubview(meetingRow)
+
+        // Each combo shortcut must differ from the others.
+        let combos: [(String, ShortcutRowView)] = [
+            ("Toggle Record", toggleRow), ("Take Screenshot", screenshotRow),
+            ("Full-Screen Screenshot", fullScreenshotRow), ("Record / Stop Meeting", meetingRow),
+        ]
+        for (_, row) in combos {
+            row.recorder.onConflict = { candidate in
+                for (name, other) in combos where other !== row {
+                    if candidate.conflicts(with: other.recorder.currentShortcut) {
+                        return "This shortcut is already used by \"\(name)\"."
+                    }
+                }
+                return nil
+            }
+        }
+
+        resetButton.bezelStyle = .rounded
+        resetButton.controlSize = .small
+        resetButton.target = self
+        resetButton.action = #selector(resetToDefaults(_:))
+        content.addSubview(resetButton)
+
+        for (title, keys) in Self.reference {
+            let label = NSTextField(labelWithString: title)
+            label.font = .systemFont(ofSize: 13)
+            label.lineBreakMode = .byTruncatingTail
+            let keyLabel = NSTextField(labelWithString: keys)
+            keyLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+            keyLabel.textColor = .secondaryLabelColor
+            keyLabel.alignment = .right
+            referenceBox.contentView?.addSubview(label)
+            referenceBox.contentView?.addSubview(keyLabel)
+            referenceRows.append((label, keyLabel))
+        }
+    }
+
+    private func comboRow(_ label: String, keyCodeKey: String, modifiersKey: String, separator: Bool) -> ShortcutRowView {
+        ShortcutRowView(label: label, captureMode: .keyCombo, placeholder: "Not set",
+                        canClear: true, showSeparator: separator) { [weak self] s in
+            UserDefaults.standard.set(s.keyCode, forKey: keyCodeKey)
+            UserDefaults.standard.set(Int(s.modifiers), forKey: modifiersKey)
+            self?.onHotkeyChanged?()
+        }
+    }
+
+    private func loadSettings() {
+        let defaults = UserDefaults.standard
+        let option = Int(NSEvent.ModifierFlags.option.rawValue)
+        func combo(_ keyCodeKey: String, _ modifiersKey: String, _ keyCode: Int, _ modifiers: Int) -> Shortcut {
+            Shortcut(keyCode: defaults.object(forKey: keyCodeKey) as? Int ?? keyCode,
+                     modifiers: UInt(defaults.object(forKey: modifiersKey) as? Int ?? modifiers))
+        }
+        activationPicker.selectItem(at: defaults.integer(forKey: "activationMode"))
+        updateHoldRowLabel()
+        holdRow.recorder.setShortcut(Shortcut(keyCode: defaults.object(forKey: "holdKeyCode") as? Int ?? 61, modifiers: 0))
+        toggleRow.recorder.setShortcut(combo("toggleStartKeyCode", "toggleStartModifiers", 49, option))
+        screenshotRow.recorder.setShortcut(combo("screenshotKeyCode", "screenshotModifiers", 21, option))
+        fullScreenshotRow.recorder.setShortcut(combo("fullScreenshotKeyCode", "fullScreenshotModifiers", 20, option))
+        meetingRow.recorder.setShortcut(combo(HotkeyMonitor.meetingKeyCodeKey, HotkeyMonitor.meetingModifiersKey, 0, 0))
+    }
+
+    private func updateHoldRowLabel() {
+        holdRow.setLabel(activationPicker.indexOfSelectedItem == 1 ? "Record Key" : "Hold to Record")
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        let pad: CGFloat = 20
+        let width = max(bounds.width - pad * 2, 300)
+        let rowH = Self.rowHeight
+        var y: CGFloat = 16
+
+        titleLabel.frame = NSRect(x: pad, y: y, width: width, height: 26)
+        y += 28
+        subtitleLabel.frame = NSRect(x: pad, y: y, width: width, height: 16)
+        y += 30
+
+        func place(_ box: NSBox, rows: Int) -> CGFloat {
+            // NSBox adds its title above the content; ~24pt covers it.
+            let height = rowH * CGFloat(rows) + 30
+            box.frame = NSRect(x: pad, y: y, width: width, height: height)
+            y += height + 12
+            return box.contentView?.bounds.height ?? 0
+        }
+
+        func layoutRows(_ rows: [NSView], in box: NSBox, top: CGFloat) {
+            guard let contentView = box.contentView else { return }
+            let inset: CGFloat = 12
+            var rowTop = contentView.bounds.height - 4 - top
+            for row in rows {
+                rowTop -= rowH
+                row.frame = NSRect(x: inset, y: rowTop, width: contentView.bounds.width - inset * 2, height: rowH)
+            }
+        }
+
+        _ = place(dictationBox, rows: 3)
+        if let contentView = dictationBox.contentView {
+            let inset: CGFloat = 12
+            let rowW = contentView.bounds.width - inset * 2
+            let top = contentView.bounds.height - 4 - rowH
+            let pickerW: CGFloat = 130
+            activationLabel.frame = NSRect(x: inset, y: top + (rowH - 18) / 2, width: rowW - pickerW - 8, height: 18)
+            activationPicker.frame = NSRect(x: contentView.bounds.width - inset - pickerW, y: top + (rowH - 26) / 2, width: pickerW, height: 26)
+            activationSeparator.frame = NSRect(x: inset, y: top, width: rowW, height: 1)
+            layoutRows([holdRow, toggleRow], in: dictationBox, top: rowH)
+        }
+        _ = place(screenshotBox, rows: 2)
+        layoutRows([screenshotRow, fullScreenshotRow], in: screenshotBox, top: 0)
+        _ = place(meetingBox, rows: 1)
+        layoutRows([meetingRow], in: meetingBox, top: 0)
+
+        resetButton.sizeToFit()
+        resetButton.frame.origin = NSPoint(x: pad + width - resetButton.frame.width, y: y - 4)
+        y += resetButton.frame.height + 12
+
+        let lineH: CGFloat = 26
+        let referenceH = lineH * CGFloat(referenceRows.count) + 34
+        referenceBox.frame = NSRect(x: pad, y: y, width: width, height: referenceH)
+        if let contentView = referenceBox.contentView {
+            let inset: CGFloat = 12
+            let keysW: CGFloat = 110
+            var lineTop = contentView.bounds.height - 6
+            for (label, keys) in referenceRows {
+                lineTop -= lineH
+                label.frame = NSRect(x: inset, y: lineTop + 4, width: contentView.bounds.width - inset * 2 - keysW, height: 18)
+                keys.frame = NSRect(x: contentView.bounds.width - inset - keysW, y: lineTop + 4, width: keysW, height: 18)
+            }
+        }
+        y += referenceH + 20
+
+        content.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(y, bounds.height))
+    }
+
     @objc private func activationChanged(_ sender: NSPopUpButton) {
         UserDefaults.standard.set(sender.indexOfSelectedItem, forKey: "activationMode")
         updateHoldRowLabel()
         onHotkeyChanged?()
     }
-    
+
     @objc private func resetToDefaults(_ sender: NSButton) {
-        UserDefaults.standard.set(true, forKey: "copyToClipboard")
-        UserDefaults.standard.set(true, forKey: "autoPasteAtCursor")
-        UserDefaults.standard.set(false, forKey: ClipboardManager.enabledDefaultsKey)
-        UserDefaults.standard.set(0, forKey: "activationMode")
-        UserDefaults.standard.set(61, forKey: "holdKeyCode")
-        UserDefaults.standard.set(49, forKey: "toggleStartKeyCode")
-        UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "toggleStartModifiers")
-        UserDefaults.standard.set(21, forKey: "screenshotKeyCode")
-        UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "screenshotModifiers")
-        UserDefaults.standard.set(20, forKey: "fullScreenshotKeyCode")
-        UserDefaults.standard.set(Int(NSEvent.ModifierFlags.option.rawValue), forKey: "fullScreenshotModifiers")
+        let defaults = UserDefaults.standard
+        let option = Int(NSEvent.ModifierFlags.option.rawValue)
+        defaults.set(0, forKey: "activationMode")
+        defaults.set(61, forKey: "holdKeyCode")
+        defaults.set(49, forKey: "toggleStartKeyCode")
+        defaults.set(option, forKey: "toggleStartModifiers")
+        defaults.set(21, forKey: "screenshotKeyCode")
+        defaults.set(option, forKey: "screenshotModifiers")
+        defaults.set(20, forKey: "fullScreenshotKeyCode")
+        defaults.set(option, forKey: "fullScreenshotModifiers")
+        defaults.removeObject(forKey: HotkeyMonitor.meetingKeyCodeKey)
+        defaults.removeObject(forKey: HotkeyMonitor.meetingModifiersKey)
         loadSettings()
         onHotkeyChanged?()
     }
@@ -2201,6 +2254,9 @@ struct Shortcut: Equatable {
         return parts.joined()
     }
     
+    /// The key alone ("M", "Space"), without modifiers.
+    var keyLabel: String { ShortcutRecorderView.keyName(for: keyCode) }
+
     /// Check if two shortcuts conflict (same effective key combo)
     func conflicts(with other: Shortcut) -> Bool {
         guard !isEmpty && !other.isEmpty else { return false }

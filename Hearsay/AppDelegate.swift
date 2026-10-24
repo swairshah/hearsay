@@ -343,6 +343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.captureScreenshot()
         }
 
+        hotkeyMonitor.onMeetingToggleRequested = { [weak self] in
+            self?.toggleMeetingRecording()
+        }
+        updateMeetingShortcutInMenu()
+
         hotkeyMonitor.onFullScreenshotRequested = { [weak self] in
             self?.captureFullScreen()
         }
@@ -417,6 +422,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             callDetector.stop()
         }
+    }
+
+    /// Show the global Record Meeting shortcut next to the menu item.
+    private func updateMeetingShortcutInMenu() {
+        let defaults = UserDefaults.standard
+        let shortcut = Shortcut(
+            keyCode: defaults.object(forKey: HotkeyMonitor.meetingKeyCodeKey) as? Int ?? 0,
+            modifiers: UInt(defaults.object(forKey: HotkeyMonitor.meetingModifiersKey) as? Int ?? 0)
+        )
+        statusBar.setMeetingShortcut(shortcut.isEmpty ? nil : shortcut)
     }
 
     func toggleMeetingRecording() {
@@ -1648,6 +1663,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onHotkeyChanged = { [weak self] in
             // Reload hotkey settings
             self?.hotkeyMonitor.loadSettings()
+            self?.updateMeetingShortcutInMenu()
         }
         controller.onWindowOpened = { [weak self] in
             // Stop an in-flight recording before pausing hotkeys for shortcut capture,

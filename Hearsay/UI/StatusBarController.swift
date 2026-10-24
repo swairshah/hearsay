@@ -101,7 +101,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Meeting recording
-        meetingItem = NSMenuItem(title: "Record Meeting", action: #selector(toggleMeetingRecording(_:)), keyEquivalent: "m")
+        meetingItem = NSMenuItem(title: "Record Meeting", action: #selector(toggleMeetingRecording(_:)), keyEquivalent: "")
         meetingItem.target = self
         meetingItem.isEnabled = true
         meetingItem.image = Self.recordMeetingImage
@@ -322,6 +322,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         guard menu === self.menu else { return }
         meetingMenuTimer?.invalidate()
         meetingMenuTimer = nil
+    }
+
+    /// Shows the global Record Meeting shortcut on the item (nil clears it).
+    /// Only single-character keys can be shown as a menu key equivalent.
+    func setMeetingShortcut(_ shortcut: Shortcut?) {
+        guard let shortcut, shortcut.keyLabel.count == 1 else {
+            meetingItem.keyEquivalent = ""
+            meetingItem.keyEquivalentModifierMask = []
+            return
+        }
+        meetingItem.keyEquivalent = shortcut.keyLabel.lowercased()
+        meetingItem.keyEquivalentModifierMask = NSEvent.ModifierFlags(rawValue: shortcut.modifiers)
+            .intersection([.command, .option, .control, .shift])
     }
 
     /// Red, like a record button; menu item images are template (grey) by default.

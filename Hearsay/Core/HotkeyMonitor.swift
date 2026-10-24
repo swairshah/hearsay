@@ -32,6 +32,7 @@ final class HotkeyMonitor {
     var onRecordingStop: (() -> Void)?
     var onScreenshotRequested: (() -> Void)?
     var onFullScreenshotRequested: (() -> Void)?
+    var onMeetingToggleRequested: (() -> Void)?
     
     private(set) var state: State = .idle
     private var eventTap: CFMachPort?
@@ -56,6 +57,14 @@ final class HotkeyMonitor {
     private let fullScreenshotHotKeyID: UInt32 = 3
     private var fullScreenshotKeyCode: UInt32 = 20  // '3' key
     private var fullScreenshotModifiers: UInt64 = UInt64(CGEventFlags.maskAlternate.rawValue)
+
+    // Record / stop meeting hotkey (configurable, not set by default)
+    static let meetingKeyCodeKey = "meetingKeyCode"
+    static let meetingModifiersKey = "meetingModifiers"
+    private var meetingHotKeyRef: EventHotKeyRef?
+    private let meetingHotKeyID: UInt32 = 4
+    private var meetingKeyCode: UInt32 = 0
+    private var meetingModifiers: UInt64 = 0
     
     private let tapDisableWindow: TimeInterval = 10.0
     private let maxTapDisableEventsBeforeRestart = 3
@@ -94,6 +103,8 @@ final class HotkeyMonitor {
         screenshotModifiers = UInt64(UserDefaults.standard.object(forKey: "screenshotModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
         fullScreenshotKeyCode = UInt32(UserDefaults.standard.object(forKey: "fullScreenshotKeyCode") as? Int ?? 20)
         fullScreenshotModifiers = UInt64(UserDefaults.standard.object(forKey: "fullScreenshotModifiers") as? Int ?? Int(CGEventFlags.maskAlternate.rawValue))
+        meetingKeyCode = UInt32(UserDefaults.standard.object(forKey: Self.meetingKeyCodeKey) as? Int ?? 0)
+        meetingModifiers = UInt64(UserDefaults.standard.object(forKey: Self.meetingModifiersKey) as? Int ?? 0)
         hotkeyLogger.info("Hotkeys loaded: activation=\(self.activationMode.rawValue), hold=\(self.holdKeyCode), toggleStart=\(self.toggleStartKeyCode)+\(self.toggleStartModifiers), screenshot=\(self.screenshotKeyCode)+\(self.screenshotModifiers)")
         // Reset double-tap state when settings change
         lastTapTime = nil
@@ -101,6 +112,7 @@ final class HotkeyMonitor {
         
         if hotKeyHandler != nil {
             registerToggleHotKey()
+            registerMeetingHotKey()
         }
     }
     
@@ -111,6 +123,9 @@ final class HotkeyMonitor {
         
         if toggleHotKeyRef == nil {
             registerToggleHotKey()
+        }
+        if meetingHotKeyRef == nil {
+            registerMeetingHotKey()
         }
         
         startHoldPolling()
@@ -150,6 +165,7 @@ final class HotkeyMonitor {
         destroyEventTap()
         unregisterToggleHotKey()
         unregisterScreenshotHotKey()
+        unregisterMeetingHotKey()
         holdModifierWasPressed = false
         rightOptionDownAlone = false
         state = .idle
@@ -502,6 +518,8 @@ final class HotkeyMonitor {
                         monitor.handleScreenshotHotKeyPressed()
                     } else if hotKeyID.id == monitor.fullScreenshotHotKeyID {
                         monitor.handleFullScreenshotHotKeyPressed()
+                    } else if hotKeyID.id == monitor.meetingHotKeyID {
+                        DispatchQueue.main.async { monitor.onMeetingToggleRequested?() }
                     }
                 }
                 return noErr
@@ -611,6 +629,39 @@ final class HotkeyMonitor {
             UnregisterEventHotKey(ref)
             fullScreenshotHotKeyRef = nil
             hotkeyLogger.info("Unregistered full-screen screenshot hotkey")
+        }
+    }
+
+    // MARK: - Meeting Hotkey
+
+    private func registerMeetingHotKey() {
+        unregisterMeetingHotKey()
+
+        guard meetingKeyCode > 0 else { return }
+
+        let hotKeyID = EventHotKeyID(signature: fourCharCode("HSY4"), id: meetingHotKeyID)
+        let carbonModifiers = carbonModifiersFromCGFlags(meetingModifiers)
+
+        let status = RegisterEventHotKey(
+            meetingKeyCode,
+            carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &meetingHotKeyRef
+        )
+
+        if status != noErr {
+            hotkeyLogger.error("Failed to register meeting hotkey: keyCode=\(self.meetingKeyCode), modifiers=\(self.meetingModifiers), status=\(status)")
+        } else {
+            hotkeyLogger.info("Registered meeting hotkey: keyCode=\(self.meetingKeyCode), carbonModifiers=\(carbonModifiers)")
+        }
+    }
+
+    private func unregisterMeetingHotKey() {
+        if let ref = meetingHotKeyRef {
+            UnregisterEventHotKey(ref)
+            meetingHotKeyRef = nil
         }
     }
 

@@ -1,112 +1,110 @@
-<h1>  <img src="assets/icon_128.png" alt="Hearsay icon" width="30"/> Hearsay</h1>
+<p align="center">
+  <img src="assets/icon_128.png" alt="Hearsay icon" width="96"/>
+</p>
 
-**Local speech-to-text for macOS.** Hold a key, speak, release — your words appear right where your cursor is. Everything runs on your Mac. 
+<h1 align="center">Hearsay</h1>
 
-![Demo](assets/demo.gif)
+<p align="center">
+  <b>Talk instead of type, and keep a transcript of every meeting.</b><br/>
+  Speech-to-text for macOS that runs entirely on your Mac.
+</p>
 
-## Install
+<p align="center">
+  <a href="https://github.com/swairshah/hearsay/releases/latest"><b>Download for macOS</b></a>
+  &nbsp;·&nbsp;
+  <code>brew install --cask swairshah/tap/hearsay</code>
+  &nbsp;·&nbsp;
+  <a href="https://hearsay.exe.xyz">hearsay.exe.xyz</a>
+</p>
 
-**[⬇ Download the latest release](https://github.com/swairshah/hearsay/releases/latest)** — open the DMG and drag Hearsay to Applications.
+<p align="center">
+  <img src="assets/readme/meetings.png" alt="The Hearsay window showing a meeting transcript next to a calendar of recorded meetings" width="900"/>
+</p>
 
-Or with Homebrew:
+## Dictate into any app
+
+Hold **Right Option (⌥)**, say what you want to write, and let go. The text appears wherever your cursor is: an email, a chat, a code editor, a terminal.
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Holding Right Option and speaking into Notes" width="560"/>
+</p>
+
+- **Hands-free:** press **⌥Space** to start and **Space** or **Esc** to stop, for longer thoughts.
+- **Screenshots while you talk:** press **⌥4** to grab a region or **⌥3** for the whole screen, and the image is referenced in your text.
+- **Nothing gets lost:** every transcription is kept in History. The last few are in the menu bar, one click to copy. If a transcription fails, the audio is kept so you can retry it.
+
+## Transcribe your meetings
+
+Click **Record Meeting** in the menu bar or the Meetings window, or set a shortcut for it. The menu bar icon turns red, and the transcript builds as people talk.
+
+<p align="center">
+  <img src="assets/readme/meeting-live.gif" alt="A meeting being transcribed live, line by line, with each speaker labelled" width="840"/>
+</p>
+
+Hearsay records your microphone and the call audio separately, so it knows which lines are yours. It works with Zoom, Google Meet, Teams, Slack, FaceTime, or anything else that plays sound on your Mac. Everyone on the call is told apart by voice. When you stop, Hearsay takes one more pass over the whole recording to sort out who said what, then tidies up filler words.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/readme/speakers.png" alt="Speakers view with talk time for each person"/>
+      <p><b>Know who said what.</b> Rename speakers once and every line updates. See how much each person talked, and merge two labels if one person got split in two.</p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/readme/calendar.png" alt="Calendar shaded by how many meetings each day had"/>
+      <p><b>Find any meeting.</b> The calendar is shaded by how busy each day was. Pick a day to see its meetings, or search every transcript at once.</p>
+    </td>
+  </tr>
+</table>
+
+- **Three ways to read:** a timeline you can edit, a clean reading view, and per-speaker stats.
+- **Share it:** copy the transcript, or export it as Markdown.
+- **Gentle reminders:** Hearsay can offer to record when a call starts, ask whether the meeting is over after a quiet stretch, and offer to stop when everyone says goodbye. It only stops by itself after a long silence, and you can turn that off.
+- **No echo:** if you use speakers instead of headphones, your mic hears the call too. Hearsay drops those duplicate lines.
+
+## Make it yours
+
+<p align="center">
+  <img src="assets/readme/shortcuts.png" alt="Keyboard Shortcuts settings" width="720"/>
+</p>
+
+- **Shortcuts:** change any of them in **Keyboard Shortcuts**, including a shortcut to start and stop meeting recording.
+- **Vocabulary:** teach Hearsay the names and jargon it keeps getting wrong ("human lair" → HumanLayer), and it fixes them in dictation and meetings.
+- **Replacements and Cleanup:** swap phrases for others and drop filler words automatically.
+- **Speech models:** choose between Parakeet (recommended on Apple Silicon), Qwen (works on Intel too) and Whisper. Download, switch and delete them from **Models**.
+
+## Private by design
+
+Your voice never leaves your Mac. Transcription, speaker detection and clean-up all run on-device, with no account, no cloud service and no subscription. Meeting transcripts are plain files in `~/Library/Application Support/Hearsay/Meetings`, and you can cap how much space their audio uses.
+
+## Getting started
+
+1. **Install** from the [latest release](https://github.com/swairshah/hearsay/releases/latest) (open the DMG and drag Hearsay to Applications), or with Homebrew:
+   ```bash
+   brew install --cask swairshah/tap/hearsay
+   ```
+2. **Allow the Microphone and Accessibility** when asked. Accessibility lets Hearsay listen for its shortcut and paste text at your cursor.
+3. **Pick a speech model** to download. Parakeet is the best choice on Apple Silicon.
+4. **For meetings,** allow *System Audio Recording* the first time you record, so Hearsay can hear the call.
+
+**Requirements:** macOS 13 or later on Apple Silicon or Intel. Recording call audio needs macOS 14.2 or later, and telling speakers apart needs Apple Silicon.
+
+## For you and your agents
+
+Hearsay comes with a `hearsay` command, so you (or an AI agent) can work with your meetings from the terminal:
 
 ```bash
-brew install --cask swairshah/tap/hearsay
+hearsay meeting start              # or stop, status
+hearsay meetings show latest       # the last meeting as Markdown
+hearsay meetings search "pricing"  # across every meeting
+hearsay vocab add HumanLayer --alias "human lair"
 ```
 
-## How to use
-
-| Action | Default shortcut |
-|--------|-----|
-| **Record** | Hold **Right Option (⌥)** and speak |
-| **Transcribe** | Release the key — text is pasted at your cursor |
-| **Hands-free mode** | **⌥Space** to toggle recording, **Space** or **Esc** to stop |
-| **Screenshot while recording** | **⌥4** to select a region, **⌥3** for the full screen — images are referenced in your transcript |
-
-All shortcuts (and the Hold vs. Toggle activation style) are customizable in **Settings → Keyboard Shortcuts**.
-
-Transcribed text is pasted at your cursor and copied to the clipboard — both behaviors can be toggled in Settings.
-
-Every transcription is saved locally in **History** — find recent ones in the menu bar dropdown, or open the Hearsay window and click any line to copy it again. If a transcription ever fails, the audio is kept and you can retry it from History with one click.
-
-## Recording meetings
-
-Choose **Record Meeting** in the menu bar (or the Meetings pane). The menu bar icon turns red while it records. Hearsay captures two tracks and transcribes them as the meeting goes:
-
-- **Your microphone**, labelled *You*
-- **The call audio** (whatever your Mac plays: Zoom, Meet, Teams…), split into *Speaker 1*, *Speaker 2*, … by an on-device diarization model. Rename speakers in the **Speakers** view.
-
-When you stop, Hearsay detects speakers again over the whole call recording (a few seconds) and splits lines where one person picks up right after another. **Re-detect Speakers** (or `hearsay meetings refine <id>`) runs the same pass on older meetings.
-
-Everything stays on your Mac. Call audio needs macOS 14.2+ and the *System Audio Recording* permission, and speaker detection needs Apple Silicon.
-
-- **Live transcript** with words appearing while people talk (Parakeet and Whisper models)
-- **Calendar** of recorded days; pick a day to list its meetings, or search across all meetings
-- **Three views**: Transcript (timeline, editable), Reader (selectable document), Speakers (talk time, rename, merge)
-- **Clean-up**: filler-word rules run by themselves when a meeting ends; "Show Original Text" and "Restore Original Transcript" are in the … menu
-- **Copy** the transcript, or **share / export Markdown**
-- **Reminders**: asks whether the meeting is over after a few silent minutes, stops by itself after a longer silence, and offers to record when a call app starts using the mic
-
-If you use speakers instead of headphones, your mic hears the call too. Hearsay removes those duplicate lines.
-
-From the terminal (works for agents too):
-
-```bash
-hearsay meeting start | stop | status
-hearsay meetings                      # recent meetings
-hearsay meetings show latest          # Markdown transcript
-hearsay meetings search "pricing"     # across every meeting
-```
-
-## Vocabulary
-
-List the names and terms your meetings use (people, companies, products, jargon) in the **Vocabulary** pane, with how the speech model tends to mishear them. Hearsay swaps those mishearings for the right spelling in dictation and meeting transcripts, and gives the list to the LLM clean-up passes as a spelling reference.
-
-```bash
-hearsay vocab add HumanLayer --alias "human lair" --note "Dexter's company"
-hearsay vocab edit HumanLayer --add-alias humanlair
-hearsay vocab search human
-hearsay vocab remove HumanLayer
-hearsay vocab export --format fluidaudio   # term: alias, alias (one per line)
-```
-
-The list lives in `~/Library/Application Support/Hearsay/vocabulary.json`; CLI edits apply to the next transcription, with or without the app running.
-
-## First launch
-
-1. Grant **Microphone** permission when prompted
-2. Grant **Accessibility** permission (System Settings → Privacy & Security → Accessibility)
-3. Pick a speech model to download:
-   - **Parakeet** — English and multilingual, Apple Silicon (recommended)
-   - **Qwen** — fast and high-quality, works on all Macs including Intel
-   - **Whisper** — English transcription (Apple Silicon)
-
-You can download, switch between, and delete models anytime from the **Models** tab.
-
-## The Hearsay window
-
-Everything lives in one window with a sidebar:
-
-- **Settings** — clipboard/paste behavior, sound effects, dock icon, history size, and keyboard shortcuts
-- **Models** — download, activate, and delete speech models: Qwen Fast (0.6B) / Quality (1.7B), Whisper tiny.en / small.en, Parakeet English (v2) / Multilingual (v3)
-- **Microphone** — pick your input device
-- **Replacements** — automatic text substitutions applied to transcripts
-- **Vocabulary** — names and terms to spell right, with how they tend to be misheard
-- **Cleanup** & **Post Processing** — rules and LLM-powered polishing for transcribed text
-- **Meetings** — calendar of recorded meetings, live and saved transcripts, search, clean-up, export
-- **History** — every transcription, click a line to copy it, retry failed ones
-- **Permissions** — check and fix Microphone/Accessibility access
-
-## Requirements
-
-- macOS 13 (Ventura) or later
-- Apple Silicon or Intel
+Apps and editor plugins can also use Hearsay for dictation through its [local API](docs/local-api-integration-guide.md).
 
 ## For developers
 
-- Hearsay ships with a `hearsay` CLI (`hearsay dictate`, `hearsay history`, `hearsay logs`, …). Apps and editor extensions can use Hearsay as a local dictation provider — see the [Local API Integration Guide](docs/local-api-integration-guide.md).
-- Speech backends: [qwen-asr](https://github.com/antirez/qwen-asr) by antirez, [WhisperKit](https://github.com/argmaxinc/WhisperKit), and NVIDIA Parakeet via [FluidAudio](https://github.com/FluidInference/FluidAudio).
 - Build instructions and architecture: [DEVELOPMENT.md](DEVELOPMENT.md)
+- Speech models: NVIDIA Parakeet via [FluidAudio](https://github.com/FluidInference/FluidAudio), [qwen-asr](https://github.com/antirez/qwen-asr) by antirez, and [WhisperKit](https://github.com/argmaxinc/WhisperKit). Speaker detection uses FluidAudio's on-device diarization models.
 
 ## License
 

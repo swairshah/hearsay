@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light only">
 <meta name="darkreader-lock">
-<title>Hearsay — local speech-to-text for macOS</title>
-<meta name="description" content="Hold a key, speak, release — your words appear where your cursor is. Transcription runs entirely on your Mac.">
+<title>Hearsay: dictation and meeting transcripts for macOS</title>
+<meta name="description" content="Hold a key to dictate into any app, and record meetings into transcripts of who said what. Runs entirely on your Mac.">
 <meta property="og:title" content="Hearsay">
-<meta property="og:description" content="Hold a key, speak, release — your words appear where your cursor is. All local.">
-<meta property="og:image" content="https://hearsay.exe.xyz/icon.png">
+<meta property="og:description" content="Dictate into any app and transcribe your meetings, all on your Mac.">
+<meta property="og:image" content="https://hearsay.exe.xyz/meetings.png">
 <link rel="icon" type="image/png" href="/icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -237,6 +237,40 @@
   footer a { color: var(--rust); text-decoration: none; font-weight: 600; }
   footer a:hover { text-decoration: underline; }
 
+  /* ---------- meetings ---------- */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 40px; }
+  .card {
+    border: 3px solid var(--ink); border-radius: 14px; background: var(--cream);
+    box-shadow: 6px 6px 0 var(--ink); overflow: hidden;
+  }
+  .card img { display: block; width: 100%; aspect-ratio: 16 / 11; object-fit: contain; padding: 14px; border-bottom: 3px solid var(--ink); background: #fff; }
+  .card .body { padding: 18px 20px 20px; }
+  .card h3 { font-size: 20px; font-weight: 800; margin-bottom: 6px; }
+  .card p { font-size: 15.5px; color: #5b4232; }
+  .facts { list-style: none; margin-top: 34px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 34px; max-width: 900px; }
+  .facts li { font-size: 16px; color: #5b4232; padding-left: 22px; position: relative; }
+  .facts li::before { content: ""; position: absolute; left: 0; top: 9px; width: 10px; height: 10px; border-radius: 3px; background: var(--rust); }
+  .facts b { color: var(--ink); }
+  .live-frame { margin-top: 34px; text-align: center; }
+  .live-frame .shot-frame { box-shadow: 10px 10px 0 var(--rust); }
+  .rec-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--rust); margin-right: 8px; vertical-align: 1px; animation: blink 1.4s steps(2) infinite; }
+
+  .lede code { font-family: "IBM Plex Mono", monospace; font-size: 0.92em; background: var(--cream-deep); padding: 1px 6px; border-radius: 5px; }
+
+  /* ---------- privacy ---------- */
+  .privacy { text-align: center; }
+  .privacy h2 { font-size: clamp(30px, 4.6vw, 44px); max-width: 760px; margin: 0 auto 16px; }
+  .privacy .lede { margin: 0 auto; }
+
+  @media (max-width: 760px) {
+    .duo, .facts { grid-template-columns: 1fr; }
+    header nav { gap: 14px; font-size: 14px; }
+    header nav .opt { display: none; }
+  }
+  @media (max-width: 480px) {
+    header nav .opt-narrow { display: none; }
+    .hero h1 { font-size: 34px; }
+  }
   @media (max-width: 560px) {
     .dict-row { flex-wrap: wrap; }
     .wave { display: none; }
@@ -250,22 +284,23 @@
     <img src="/icon.png" alt="">
     <span class="word">Hearsay</span>
     <nav>
-      <a href="#how">Shortcuts</a>
-      <a href="#models">Models</a>
-      <a href="#dev">CLI</a>
+      <a class="opt-narrow" href="#dictation">Dictation</a>
+      <a href="#meetings">Meetings</a>
+      <a class="opt" href="#models">Models</a>
+      <a class="opt" href="#dev">CLI</a>
       <a href="https://github.com/swairshah/hearsay">GitHub</a>
     </nav>
   </div>
 </header>
 
 <section class="hero wrap">
-  <span class="icon-frame"><img class="icon" src="/icon.png" alt="Hearsay icon — a vintage microphone with a flowing red and gold sound wave"></span>
-  <p class="hero-tag">Local Dictation App</p>
+  <span class="icon-frame"><img class="icon" src="/icon.png" alt="Hearsay icon: a vintage microphone with a flowing red and gold sound wave"></span>
+  <p class="hero-tag">Dictation &amp; meeting notes for macOS</p>
   <p class="hero-subtag">we have wisprflow at home.</p>
-  <h1>Hold a key. Say the thing. <span class="rust">It's typed.</span></h1>
-  <p class="sub">Hearsay is local speech-to-text for macOS. Release the key and your words
-  land <b>right where your cursor is</b> — transcribed on your Mac, by your Mac.
-  No cloud, no account, works on a plane.</p>
+  <h1>Talk instead of type. <span class="rust">Keep every meeting.</span></h1>
+  <p class="sub">Hold a key and your words land <b>right where your cursor is</b>.
+  Hit record on a call and get a transcript of <b>who said what</b>.
+  It all runs on your Mac: no cloud, no account, works on a plane.</p>
 
   <div class="chips">
     <span class="chip parakeet">parakeet</span>
@@ -273,48 +308,104 @@
     <span class="chip whisper">whisper</span>
   </div>
 
-  <!-- live dictation demo -->
-  <div class="dictation" aria-hidden="true">
-    <div class="dict-row">
-      <span class="kbd" id="key">⌥ &nbsp;right option</span>
-      <svg class="wave" id="wave" viewBox="0 0 300 34" width="300">
-        <path class="p1" d="M4 17 Q 22 2, 40 17 T 76 17 Q 94 30, 112 15 T 148 17 Q 166 4, 184 19 T 220 15 Q 238 28, 256 17 T 292 17"/>
-        <path class="p2" d="M4 19 Q 26 32, 48 17 T 88 19 Q 108 6, 128 19 T 168 15 Q 188 30, 208 17 T 248 19 Q 268 8, 292 17" opacity="0.85"/>
-      </svg>
-    </div>
-    <div class="typed-line"><span id="typed"></span><span class="caret"></span></div>
-    <div class="dict-state" id="state">idle — hold the key to talk</div>
-  </div>
-
   <div>
     <button class="install-box" onclick="navigator.clipboard.writeText('brew install --cask swairshah/tap/hearsay').then(()=>{document.getElementById('h').textContent='copied! now go talk to it →'})">
       <span class="dollar">$</span> brew install --cask swairshah/tap/hearsay
     </button>
     <span class="copy-hint" id="h">click to copy</span>
-    <span class="alt-dl">or <a href="https://github.com/swairshah/hearsay/releases/latest">download the DMG</a> — notarized, macOS 13+, Apple Silicon &amp; Intel</span>
+    <span class="alt-dl">or <a href="https://github.com/swairshah/hearsay/releases/latest">download the DMG</a>: notarized, macOS 13+, Apple Silicon &amp; Intel</span>
   </div>
 </section>
 
 <section class="shot-section wrap">
   <div class="shot-frame">
-    <img src="/demo.gif" alt="Screen recording: holding right option, speaking, and the transcribed sentence appearing at the text cursor">
+    <img src="/meetings.png" width="1600" height="1086" alt="The Hearsay window: a calendar of recorded meetings beside a transcript with each speaker named">
   </div>
-  <p class="shot-caption">The whole loop, in real time.</p>
 </section>
 
-<section class="section alt" id="how">
+<section class="section alt" id="dictation">
   <div class="wrap">
-    <p class="kicker">Shortcuts</p>
-    <h2>Four gestures, no windows</h2>
-    <div class="keys">
-      <div class="row"><span>Record — hold and speak, release to paste</span><span class="kbd">hold ⌥</span></div>
-      <div class="row"><span>Hands-free — start, then stop when done</span><span class="kbd">⌥ space &nbsp;·&nbsp; esc</span></div>
-      <div class="row"><span>Screenshot a region mid-recording</span><span class="kbd">⌥ 4</span></div>
-      <div class="row"><span>Screenshot the full screen mid-recording</span><span class="kbd">⌥ 3</span></div>
+    <p class="kicker">Dictation</p>
+    <h2>Hold a key. Say the thing. It's typed.</h2>
+    <p class="lede">Hold <b>Right Option</b>, talk, let go. The text appears in whatever app you're in:
+    email, chat, your editor, the terminal.</p>
+
+    <!-- live dictation demo -->
+    <div class="dictation" aria-hidden="true" style="margin-top:34px;">
+      <div class="dict-row">
+        <span class="kbd" id="key">⌥ &nbsp;right option</span>
+        <svg class="wave" id="wave" viewBox="0 0 300 34" width="300">
+          <path class="p1" d="M4 17 Q 22 2, 40 17 T 76 17 Q 94 30, 112 15 T 148 17 Q 166 4, 184 19 T 220 15 Q 238 28, 256 17 T 292 17"/>
+          <path class="p2" d="M4 19 Q 26 32, 48 17 T 88 19 Q 108 6, 128 19 T 168 15 Q 188 30, 208 17 T 248 19 Q 268 8, 292 17" opacity="0.85"/>
+        </svg>
+      </div>
+      <div class="typed-line"><span id="typed"></span><span class="caret"></span></div>
+      <div class="dict-state" id="state">idle: hold the key to talk</div>
     </div>
-    <p class="lede" style="margin-top:22px;">
-    Screenshots taken while you talk get referenced in the transcript — say
-    "this button here" and the image rides along. Shortcuts are remappable in Settings.</p>
+
+    <div class="keys">
+      <div class="row"><span>Dictate: hold, speak, release to paste</span><span class="kbd">hold ⌥</span></div>
+      <div class="row"><span>Hands-free: start now, stop when you're done</span><span class="kbd">⌥ space &nbsp;·&nbsp; esc</span></div>
+      <div class="row"><span>Screenshot a region while you talk</span><span class="kbd">⌥ 4</span></div>
+      <div class="row"><span>Screenshot the whole screen while you talk</span><span class="kbd">⌥ 3</span></div>
+      <div class="row"><span>Start or stop a meeting recording</span><span class="kbd">your choice</span></div>
+    </div>
+    <p class="lede" style="margin-top:22px;">Screenshots taken mid-sentence are referenced in the text,
+    so "this button here" brings the image along. Every shortcut can be changed in
+    <b>Keyboard Shortcuts</b>, and every transcription is kept in History.</p>
+  </div>
+</section>
+
+<section class="section" id="meetings">
+  <div class="wrap">
+    <p class="kicker"><span class="rec-dot"></span>Meetings</p>
+    <h2>A transcript of every call, as it happens</h2>
+    <p class="lede">Click <b>Record Meeting</b> and the transcript builds while people talk.
+    Hearsay records your mic and the call separately, so it knows which lines are yours,
+    and tells everyone else apart by voice. Zoom, Meet, Teams, Slack, FaceTime: if your Mac plays it, Hearsay hears it.</p>
+
+    <div class="live-frame">
+      <div class="shot-frame">
+        <img src="/meeting-live.gif" width="840" height="570" alt="A meeting transcribed live, line by line, with speakers labelled">
+      </div>
+      <p class="shot-caption">A meeting transcribed live, sped up.</p>
+    </div>
+
+    <div class="duo">
+      <div class="card">
+        <img src="/speakers.png" alt="Speakers view: talk time for each person on the call" loading="lazy">
+        <div class="body">
+          <h3>Know who said what</h3>
+          <p>When you stop, Hearsay takes one more pass over the whole call to sort out speakers,
+          then tidies filler words. Rename someone once and every line follows.</p>
+        </div>
+      </div>
+      <div class="card">
+        <img src="/calendar.png" alt="Calendar shaded by how many meetings each day had" loading="lazy">
+        <div class="body">
+          <h3>Find any meeting</h3>
+          <p>The calendar is shaded by how busy each day was. Pick a day, or search
+          every transcript you've ever recorded.</p>
+        </div>
+      </div>
+    </div>
+
+    <ul class="facts">
+      <li><b>Three ways to read:</b> an editable timeline, a clean reading view, and talk time per person.</li>
+      <li><b>Share it:</b> copy the transcript or export Markdown.</li>
+      <li><b>Gentle nudges:</b> offers to record when a call starts, and to stop when everyone says goodbye.</li>
+      <li><b>No echo:</b> on speakers instead of headphones, the duplicate lines your mic picks up are dropped.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section alt privacy">
+  <div class="wrap">
+    <p class="kicker">Private by design</p>
+    <h2>Your voice never leaves your Mac.</h2>
+    <p class="lede">Transcription, speaker detection and clean-up all run on-device. No account,
+    no cloud service, no subscription. Transcripts are plain files you own, and you decide how much
+    space meeting audio may use.</p>
   </div>
 </section>
 
@@ -322,20 +413,21 @@
   <div class="wrap">
     <p class="kicker">Models</p>
     <h2>Pick your transcriber</h2>
-    <p class="lede">Download in-app on first launch; switch or delete anytime in Settings → Models.</p>
+    <p class="lede">Download one in the app on first launch; switch or delete any time from <b>Models</b>.
+    Teach it your names and jargon in <b>Vocabulary</b>.</p>
     <div class="models">
       <div class="model">
         <h3>Parakeet</h3>
         <div>
           <span class="tag rec">recommended</span><span class="tag">apple silicon</span>
         </div>
-        <p>NVIDIA Parakeet — English and multilingual, via
-        <a href="https://github.com/FluidInference/FluidAudio">FluidAudio</a>.</p>
+        <p>NVIDIA Parakeet, English and multilingual, via
+        <a href="https://github.com/FluidInference/FluidAudio">FluidAudio</a>. Powers live meeting transcripts.</p>
       </div>
       <div class="model">
         <h3>Qwen</h3>
         <div><span class="tag">all macs</span></div>
-        <p>Fast and accurate, runs on every Mac — Apple Silicon or Intel.
+        <p>Fast and accurate, runs on every Mac, Apple Silicon or Intel.
         Via antirez's <a href="https://github.com/antirez/qwen-asr">qwen-asr</a>.</p>
       </div>
       <div class="model">
@@ -350,19 +442,23 @@
 
 <section class="section alt" id="dev">
   <div class="wrap">
-    <p class="kicker">For developers</p>
-    <h2>It's also a dictation provider</h2>
-    <p class="lede">Hearsay ships a CLI, and other apps can use it as a local dictation
-    backend — editors, launchers, your own scripts. See the
+    <p class="kicker">For you and your agents</p>
+    <h2>Your meetings, from the terminal</h2>
+    <p class="lede">Hearsay ships a <code>hearsay</code> command, so you (or an AI agent) can pull up
+    last week's call and ask what was decided. Other apps can use Hearsay for dictation too; see the
     <a href="https://github.com/swairshah/hearsay/blob/main/docs/local-api-integration-guide.md" style="color:var(--rust); font-weight:600;">integration guide</a>.</p>
-    <pre><span class="c"># dictate from a script, print the transcript</span>
-<span class="a">hearsay</span> dictate
+    <pre><span class="c"># the last meeting, as Markdown</span>
+<span class="a">hearsay</span> meetings show latest
 
-<span class="c"># everything you've said lately</span>
-<span class="a">hearsay</span> history
+<span class="c"># every meeting that mentioned pricing</span>
+<span class="a">hearsay</span> meetings search "pricing"
 
-<span class="c"># when something's off</span>
-<span class="a">hearsay</span> logs</pre>
+<span class="c"># start and stop recording from a script</span>
+<span class="a">hearsay</span> meeting start
+<span class="a">hearsay</span> meeting stop
+
+<span class="c"># dictate from a script, print the transcript</span>
+<span class="a">hearsay</span> dictate</pre>
   </div>
 </section>
 
@@ -371,8 +467,8 @@
   <a href="https://github.com/swairshah/hearsay/releases">Releases</a> ·
   <a href="https://github.com/swairshah/hearsay/issues">Issues</a> ·
   MIT · by <a href="https://github.com/swairshah">Swair</a></p>
-  <p style="margin-top:8px;">First launch asks for Microphone and Accessibility — that's how the
-  text gets to your cursor.</p>
+  <p style="margin-top:8px;">First launch asks for Microphone and Accessibility: that's how the
+  text gets to your cursor. Recording call audio needs macOS 14.2+, and telling speakers apart needs Apple Silicon.</p>
 </footer>
 
 <script>

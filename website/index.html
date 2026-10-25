@@ -177,6 +177,10 @@
   .shot-frame img { display: block; max-width: 100%; height: auto; }
   .shot-caption { margin-top: 20px; font-size: 15px; font-style: italic; color: #7a6046; }
 
+  .trio { display: flex; gap: 18px; align-items: flex-start; margin-top: 34px; }
+  .trio img { min-width: 0; width: 100%; height: auto; border-radius: 10px; border: 2.5px solid var(--ink); box-shadow: 5px 5px 0 var(--ink); background: #fff; }
+  @media (max-width: 640px) { .trio { flex-direction: column; align-items: center; } .trio img { flex: none !important; max-width: 100%; } .trio img:last-child { max-width: 60%; } }
+
   /* ---------- sections ---------- */
   .kicker {
     font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600;
@@ -319,7 +323,12 @@
 
 <section class="shot-section wrap">
   <div class="shot-frame">
-    <img src="/meetings.png" width="1600" height="1086" alt="The Hearsay window: a calendar of recorded meetings beside a transcript with each speaker named">
+    <img src="/meeting-live.gif" width="840" height="570" alt="A meeting transcribed live, line by line, with speakers labelled">
+  </div>
+  <div class="trio">
+    <img src="/meetings.png" style="flex: 1.473" alt="The Meetings window: a calendar of recorded meetings beside a transcript with each speaker named">
+    <img src="/models.png" style="flex: 1.132" alt="Manage Models: choose between Qwen, Whisper and Parakeet speech models">
+    <img src="/menu.png" style="flex: 0.539" alt="The Hearsay menu bar dropdown with Record Meeting and recent transcriptions">
   </div>
 </section>
 
@@ -366,9 +375,8 @@
 
     <div class="live-frame">
       <div class="shot-frame">
-        <img src="/meeting-live.gif" width="840" height="570" alt="A meeting transcribed live, line by line, with speakers labelled">
+        <img src="/reader.png" width="1200" height="819" alt="Reader view of a meeting transcript, with each speaker named" loading="lazy">
       </div>
-      <p class="shot-caption">A meeting transcribed live, sped up.</p>
     </div>
 
     <div class="duo">

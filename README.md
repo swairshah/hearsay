@@ -18,8 +18,16 @@
 </p>
 
 <p align="center">
-  <img src="assets/readme/meetings.png" alt="The Hearsay window showing a meeting transcript next to a calendar of recorded meetings" width="900"/>
+  <img src="assets/readme/meeting-live.gif" alt="A meeting being transcribed live, line by line, with each speaker labelled" width="900"/>
 </p>
+
+<table>
+  <tr>
+    <td width="46.8%"><img src="assets/readme/meetings.png" alt="The Meetings window: a calendar of recorded meetings beside a transcript with each speaker named"/></td>
+    <td width="36.0%"><img src="assets/readme/models.png" alt="Manage Models: choose between Qwen, Whisper and Parakeet speech models"/></td>
+    <td width="17.2%"><img src="assets/readme/menu.png" alt="The Hearsay menu bar dropdown with Record Meeting and recent transcriptions"/></td>
+  </tr>
+</table>
 
 ## Dictate into any app
 
@@ -38,7 +46,7 @@ Hold **Right Option (⌥)**, say what you want to write, and let go. The text ap
 Click **Record Meeting** in the menu bar or the Meetings window, or set a shortcut for it. The menu bar icon turns red, and the transcript builds as people talk.
 
 <p align="center">
-  <img src="assets/readme/meeting-live.gif" alt="A meeting being transcribed live, line by line, with each speaker labelled" width="840"/>
+  <img src="assets/readme/reader.png" alt="Reader view of a meeting transcript, with each speaker named" width="720"/>
 </p>
 
 Hearsay records your microphone and the call audio separately, so it knows which lines are yours. It works with Zoom, Google Meet, Teams, Slack, FaceTime, or anything else that plays sound on your Mac. Everyone on the call is told apart by voice. When you stop, Hearsay takes one more pass over the whole recording to sort out who said what, then tidies up filler words.

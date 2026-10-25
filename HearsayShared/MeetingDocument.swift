@@ -208,8 +208,13 @@ struct MeetingSummary: Codable, Equatable, Identifiable {
 // MARK: - Storage layout
 
 enum MeetingPaths {
+    /// `HEARSAY_MEETINGS_PATH` points the app and CLI at another folder
+    /// (demo data, tests) without touching the real meetings.
     static var rootDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        if let override = ProcessInfo.processInfo.environment["HEARSAY_MEETINGS_PATH"], !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Hearsay/Meetings", isDirectory: true)
     }
 
